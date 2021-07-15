@@ -147,8 +147,6 @@ dist_noinst_DATA = \
 	ansi-palette.json \
 	$(BUILTIN_LNAVSCRIPTS) \
 	$(BUILTIN_SHSCRIPTS) \
-	internals/config-v1.schema.json \
-	internals/format-v1.schema.json \
 	$(CONFIG_FILES) \
 	$(FORMAT_FILES) \
 	xterm-palette.json
@@ -429,7 +427,10 @@ uncrusty:
 
 if !DISABLE_DOCUMENTATION
 all-local: lnav
-	env DUMP_INTERNALS_DIR=$(srcdir)/internals DUMP_CRASH=1 ./lnav Makefile
+	if test -w $(srcdir)/internals; then \
+		env DUMP_INTERNALS_DIR=$(srcdir)/internals DUMP_CRASH=1 ./lnav Makefile; \
+		mv $(srcdir)/internals/*.schema.json $(top_srcdir)/docs/schemas; \
+	fi
 endif
 
 install-exec-hook:

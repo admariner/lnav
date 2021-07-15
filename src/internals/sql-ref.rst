@@ -3314,8 +3314,8 @@ timeslice(*time*, *slice*)
 
       ;SELECT timeslice(log_time_msecs, 'before 4:30am') AS slice, count(1) FROM lnav_example_log GROUP BY slice
                slice          count(1) 
-      <NULL>                         3 
-      2017-02-03 04:30:00.000        1 
+      <NULL>                         1 
+      2017-02-03 00:00:00.000        3 
 
   **See Also**
     :ref:`date`, :ref:`datetime`, :ref:`julianday`, :ref:`strftime`, :ref:`time`, :ref:`timediff`
@@ -3499,8 +3499,8 @@ xpath(*xpath*, *xmldoc*)
 
       ;SELECT * FROM xpath('/abc/def', '<abc><def a="b">Hello</def><def>Bye</def></abc>')
               result           node_path  node_attr node_text 
-      <def a="b">Hello</def>  /abc/def[1] {"a":"b"} Hello     
-      <def>Bye</def>          /abc/def[2] {}        Bye       
+      <def a="b">Hello</def>␊ /abc/def[1] {"a":"b"} Hello     
+      <def>Bye</def>␊         /abc/def[2] {}        Bye       
 
     To select all 'a' attributes on the path '/abc/def':
 
