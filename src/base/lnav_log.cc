@@ -190,7 +190,7 @@ log_argv(int argc, char* argv[])
     const char* log_path = getenv("LNAV_LOG_PATH");
 
     if (log_path != nullptr) {
-        lnav_log_file = make_optional_from_nullable(fopen(log_path, "a"));
+        lnav_log_file = make_optional_from_nullable(fopen(log_path, "ae"));
     }
 
     log_info("argv[%d] =", argc);
@@ -390,6 +390,21 @@ log_msg_extra_complete()
         fwrite(line, 1, 1, file);
         fflush(file);
     };
+}
+
+void
+log_backtrace(lnav_log_level_t level)
+{
+#ifdef HAVE_EXECINFO_H
+    int frame_count;
+    void* frames[128];
+
+    frame_count = backtrace(frames, 128);
+    auto bt = backtrace_symbols(frames, frame_count);
+    for (int lpc = 0; lpc < frame_count; lpc++) {
+        log_msg(level, __FILE__, __LINE__, "%s", bt[lpc]);
+    }
+#endif
 }
 
 #pragma GCC diagnostic push

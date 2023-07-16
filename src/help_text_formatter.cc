@@ -53,7 +53,8 @@ get_related(const help_text& ht)
         auto tagged = help_text::TAGGED.equal_range(tag);
 
         for (auto tag_iter = tagged.first; tag_iter != tagged.second;
-             ++tag_iter) {
+             ++tag_iter)
+        {
             if (tag_iter->second == &ht) {
                 continue;
             }
@@ -377,6 +378,17 @@ format_help_text_for_term(const help_text& ht,
                 .append(attr_line_t::from_ansi_str(param.ht_summary),
                         &(tws.with_indent(2 + max_param_name_width + 3)))
                 .append("\n");
+            if (!param.ht_parameters.empty()) {
+                for (const auto& sub_param : param.ht_parameters) {
+                    alb.indent(body_indent + max_param_name_width + 3)
+                        .append(lnav::roles::variable(sub_param.ht_name))
+                        .append(" - ")
+                        .append(
+                            attr_line_t::from_ansi_str(sub_param.ht_summary),
+                            &(tws.with_indent(2 + max_param_name_width + 5)))
+                        .append("\n");
+                }
+            }
         }
     }
     if (htc == help_text_content::full && !ht.ht_results.empty()) {
@@ -488,6 +500,8 @@ format_example_text_for_term(const help_text& ht,
 
         ex_line.pad_to(50).with_attr_for_all(
             VC_ROLE.value(role_t::VCR_QUOTED_CODE));
+        auto ex_result
+            = eval(ht, ex).with_attr_for_all(SA_PREFORMATTED.value());
         alb.append("#")
             .append(fmt::to_string(count))
             .append(" ")
@@ -498,7 +512,7 @@ format_example_text_for_term(const help_text& ht,
             .append(ex_line, &tws.with_indent(3).with_padding_indent(3))
             .append("\n")
             .indent(3)
-            .append(eval(ht, ex), &tws.with_indent(3))
+            .append(ex_result, &tws.with_indent(0))
             .append("\n");
 
         count += 1;
@@ -637,6 +651,20 @@ format_help_text_for_rst(const help_text& ht,
                     param.ht_name,
                     param.ht_nargs == help_nargs_t::HN_REQUIRED ? "\\*" : "",
                     param.ht_summary);
+
+                if (!param.ht_parameters.empty()) {
+                    fprintf(rst_file, "\n");
+                    for (const auto& sub_param : param.ht_parameters) {
+                        fmt::fprintf(
+                            rst_file,
+                            "      * **%s%s** --- %s\n",
+                            sub_param.ht_name,
+                            sub_param.ht_nargs == help_nargs_t::HN_REQUIRED
+                                ? "\\*"
+                                : "",
+                            sub_param.ht_summary);
+                    }
+                }
             }
         }
         fmt::fprintf(rst_file, "\n");

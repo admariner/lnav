@@ -235,10 +235,10 @@ readline_context::completion_generator(const char* text_in, int state)
 
         if (arg_needs_shlex) {
             shlex arg_lexer(text_str);
-            std::map<std::string, std::string> scope;
+            std::map<std::string, scoped_value_t> scope;
             std::string result;
 
-            if (arg_lexer.eval(result, scope)) {
+            if (arg_lexer.eval(result, scoped_resolver{&scope})) {
                 text_str = result;
             }
         }
@@ -381,11 +381,11 @@ readline_context::attempted_completion(const char* text, int start, int end)
             point -= 1;
         }
         shlex lexer(rl_line_buffer, point);
-        std::map<std::string, std::string> scope;
+        std::map<std::string, scoped_value_t> scope;
 
         arg_possibilities = nullptr;
         rl_completion_append_character = 0;
-        if (lexer.split(prefix, scope)) {
+        if (lexer.split(prefix, scoped_resolver{&scope})) {
             auto prefix2
                 = fmt::format(FMT_STRING("{}"), fmt::join(prefix, "\x1f"));
             auto prefix_iter = loaded_context->rc_prefixes.find(prefix2);
@@ -421,12 +421,36 @@ readline_context::attempted_completion(const char* text, int start, int end)
 
                 if (proto.empty()) {
                     arg_possibilities = nullptr;
+                } else if (proto[0] == "dirname") {
+                    shlex fn_lexer(rl_line_buffer, rl_point);
+                    std::vector<std::string> fn_list;
+
+                    fn_lexer.split(fn_list, scoped_resolver{&scope});
+
+                    const auto& last_fn = fn_list.size() <= 1 ? ""
+                                                              : fn_list.back();
+
+                    static std::set<std::string> dir_name_set;
+
+                    dir_name_set.clear();
+                    auto_mem<char> completed_fn;
+                    int fn_state = 0;
+
+                    while ((completed_fn = rl_filename_completion_function(
+                                last_fn.c_str(), fn_state))
+                           != nullptr)
+                    {
+                        dir_name_set.insert(completed_fn.in());
+                        fn_state += 1;
+                    }
+                    arg_possibilities = &dir_name_set;
+                    arg_needs_shlex = true;
                 } else if (proto[0] == "filename") {
                     shlex fn_lexer(rl_line_buffer, rl_point);
                     std::vector<std::string> fn_list;
                     int found = 0;
 
-                    fn_lexer.split(fn_list, scope);
+                    fn_lexer.split(fn_list, scoped_resolver{&scope});
 
                     const auto& last_fn = fn_list.size() <= 1 ? ""
                                                               : fn_list.back();
@@ -690,12 +714,20 @@ readline_curses::start()
     }
 
     this->rc_command_pipe[RCF_MASTER] = sp[RCF_MASTER];
+    this->rc_command_pipe[RCF_MASTER].close_on_exec();
     this->rc_command_pipe[RCF_SLAVE] = sp[RCF_SLAVE];
+    this->rc_command_pipe[RCF_SLAVE].close_on_exec();
 
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1) {
         throw error(errno);
     }
 
+    if (this->vc_width > 0) {
+        ws.ws_col = this->vc_width;
+    } else if (this->vc_width < 0) {
+        ws.ws_col -= this->vc_left;
+        ws.ws_col += this->vc_width;
+    }
     if (openpty(this->rc_pty[RCF_MASTER].out(),
                 this->rc_pty[RCF_SLAVE].out(),
                 nullptr,
@@ -706,6 +738,9 @@ readline_curses::start()
         perror("error: failed to open terminal(openpty)");
         throw error(errno);
     }
+
+    this->rc_pty[RCF_MASTER].close_on_exec();
+    this->rc_pty[RCF_SLAVE].close_on_exec();
 
     if ((this->rc_child = fork()) == -1) {
         throw error(errno);
@@ -856,7 +891,7 @@ readline_curses::start()
                 }
             }
             if (FD_ISSET(this->rc_command_pipe[RCF_SLAVE], &ready_rfds)) {
-                char msg[1024 + 1];
+                char msg[8 + MAXPATHLEN + 1024];
 
                 if ((rc = recvstring(this->rc_command_pipe[RCF_SLAVE],
                                      msg,
@@ -869,7 +904,13 @@ readline_curses::start()
                     char type[1024];
 
                     msg[rc] = '\0';
-                    if (sscanf(msg, "i:%d:%n", &rl_point, &prompt_start) == 1) {
+                    if (startswith(msg, "cd:")) {
+                        const char* cwd = &msg[3];
+
+                        log_perror(chdir(cwd));
+                    } else if (sscanf(msg, "i:%d:%n", &rl_point, &prompt_start)
+                               == 1)
+                    {
                         const char* initial = &msg[prompt_start];
 
                         rl_extend_line_buffer(strlen(initial) + 1);
@@ -1241,12 +1282,21 @@ readline_curses::focus(int context,
                        const std::string& prompt,
                        const std::string& initial)
 {
-    char buffer[1024];
+    char cwd[MAXPATHLEN + 1024];
+    char buffer[8 + sizeof(cwd)];
 
     curs_set(1);
 
     this->rc_active_context = context;
 
+    getcwd(cwd, sizeof(cwd));
+    snprintf(buffer, sizeof(buffer), "cd:%s", cwd);
+    if (sendstring(
+            this->rc_command_pipe[RCF_MASTER], buffer, strlen(buffer) + 1)
+        == -1)
+    {
+        perror("focus: write failed");
+    }
     snprintf(buffer, sizeof(buffer), "f:%d:%s", context, prompt.c_str());
     if (sendstring(
             this->rc_command_pipe[RCF_MASTER], buffer, strlen(buffer) + 1)
@@ -1394,11 +1444,12 @@ readline_curses::do_update()
         return;
     }
 
+    auto actual_width = this->get_actual_width();
     if (this->rc_active_context == -1) {
         int alt_start = -1;
         struct line_range lr(0, 0);
         attr_line_t alt_al;
-        view_colors& vc = view_colors::singleton();
+        auto& vc = view_colors::singleton();
 
         wmove(this->vc_window, this->get_actual_y(), this->vc_left);
         auto attrs = vc.attrs_for_role(role_t::VCR_TEXT);
@@ -1406,7 +1457,7 @@ readline_curses::do_update()
                   attrs.ta_attrs,
                   vc.ensure_color_pair(attrs.ta_fg_color, attrs.ta_bg_color),
                   nullptr);
-        whline(this->vc_window, ' ', this->vc_width);
+        whline(this->vc_window, ' ', actual_width);
 
         if (time(nullptr) > this->rc_value_expiration) {
             this->rc_value.clear();
@@ -1446,7 +1497,7 @@ readline_curses::do_update()
                                  this->get_actual_y(),
                                  this->vc_left,
                                  al,
-                                 line_range{0, (int) this->vc_width});
+                                 line_range{0, (int) actual_width});
 
         wmove(
             this->vc_window, this->get_actual_y(), this->vc_left + this->vc_x);
@@ -1505,4 +1556,24 @@ readline_curses::update_poll_set(std::vector<struct pollfd>& pollfds)
         pollfds.push_back(
             (struct pollfd){this->rc_command_pipe[RCF_MASTER], POLLIN, 0});
     }
+}
+
+void
+readline_curses::window_change()
+{
+    struct winsize ws;
+
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1) {
+        throw error(errno);
+    }
+    if (this->vc_width > 0) {
+        ws.ws_col = this->vc_width;
+    } else if (this->vc_width < 0) {
+        ws.ws_col -= this->vc_left;
+        ws.ws_col += this->vc_width;
+    }
+    if (ioctl(this->rc_pty[RCF_MASTER], TIOCSWINSZ, &ws) == -1) {
+        throw error(errno);
+    }
+    kill(this->rc_child, SIGWINCH);
 }

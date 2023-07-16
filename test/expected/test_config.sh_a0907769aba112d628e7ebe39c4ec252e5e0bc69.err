@@ -1,3 +1,11 @@
+[33m⚠ warning[0m: unexpected value for property “[1m/ui/theme-defs/invalid-theme/styles/text/bad-property[0m”
+[36m --> [0m[1m{test_dir}/bad-config2/configs/invalid-theme/config.json[0m:9
+[36m | [0m[37m[40m                        "bad-property": "abc"[0m
+[36m =[0m   [36mhelp[0m: [1mAvailable Properties[0m
+           [1mcolor[0m [4m#hex|color_name[0m
+           [1mbackground-color[0m [4m#hex|color_name[0m
+           [1munderline[0m 
+           [1mbold[0m
 [1m[31m✘ error[0m: '[1mbad[0m' is not a supported configuration $schema version
 [36m --> [0m[1m{test_dir}/bad-config2/formats/invalid-config/config.bad-schema.json[0m:2
 [36m | [0m[37m[40m    "$schema": "bad"                    [0m
@@ -36,3 +44,15 @@
 [1m[31m✘ error[0m: invalid JSON
  [1m[31mreason[0m: parse error: premature EOF
 [36m --> [0m[1m{test_dir}/bad-config2/formats/invalid-config/config.truncated.json[0m:3
+[1m[31m✘ error[0m: invalid value for property “[1m/ui/theme-defs/invalid-theme/styles/text/color[0m”
+ [1m[31mreason[0m: invalid color -- “InvalidColor”
+[1m[31m |      [0m  [1m[31mreason[0m: Unknown color: 'InvalidColor'.  See https://jonasjacek.github.io/colors/ for a list of supported color names
+[36m --> [0m[1m{test_dir}/bad-config2/configs/invalid-theme/config.json[0m:8
+[36m =[0m [36mhelp[0m: [1mProperty Synopsis[0m
+           [1m/ui/theme-defs/invalid-theme/styles/text/color[0m [4m#hex|color_name[0m
+         [1mDescription[0m
+           The foreground color value for this style. The value can be the name of an xterm color, the hexadecimal value, or a theme variable reference.
+         [1mExamples[0m
+           #fff
+           Green
+           $black

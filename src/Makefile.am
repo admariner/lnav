@@ -201,6 +201,7 @@ noinst_HEADERS = \
 	environ_vtab.hh \
 	field_overlay_source.hh \
 	file_collection.hh \
+	file_converter_manager.hh \
 	file_format.hh \
 	file_vtab.cfg.hh \
 	files_sub_source.hh \
@@ -211,6 +212,7 @@ noinst_HEADERS = \
 	fts_fuzzy_match.hh \
 	grep_highlighter.hh \
 	grep_proc.hh \
+	hasher.hh \
 	help.md \
 	help.txt \
 	help_text.hh \
@@ -258,8 +260,8 @@ noinst_HEADERS = \
 	md2attr_line.hh \
 	md4cpp.hh \
 	optional.hpp \
-	pcap_manager.hh \
-	piper_proc.hh \
+	piper.looper.hh \
+	piper.looper.cfg.hh \
 	plain_text_source.hh \
 	pollable.hh \
 	pretty_printer.hh \
@@ -290,6 +292,7 @@ noinst_HEADERS = \
 	spectro_source.hh \
 	sqlitepp.hh \
 	sqlitepp.client.hh \
+	sql_execute.hh \
 	sql_help.hh \
 	sql_util.hh \
 	sqlite-extension-func.hh \
@@ -312,6 +315,7 @@ noinst_HEADERS = \
 	top_status_source.hh \
 	top_status_source.cfg.hh \
 	unique_path.hh \
+	url_handler.cfg.hh \
 	url_loader.hh \
 	view_curses.hh \
 	view_helpers.hh \
@@ -390,6 +394,7 @@ libdiag_a_SOURCES = \
 	extension-functions.cc \
 	field_overlay_source.cc \
 	file_collection.cc \
+	file_converter_manager.cc \
 	file_format.cc \
 	files_sub_source.cc \
 	filter_observer.cc \
@@ -427,7 +432,7 @@ libdiag_a_SOURCES = \
 	md4cpp.cc \
 	network-extension-functions.cc \
 	data_parser.cc \
-	pcap_manager.cc \
+	piper.looper.cc \
 	plain_text_source.cc \
 	pollable.cc \
 	pretty_printer.cc \
@@ -456,7 +461,6 @@ libdiag_a_SOURCES = \
 	text_format.cc \
 	textfile_sub_source.cc \
 	timer.cc \
-	piper_proc.cc \
 	sql_commands.cc \
 	sql_util.cc \
 	state-extension-functions.cc \
@@ -496,8 +500,13 @@ lnav_test_SOURCES = \
     test_override.c \
     $(PLUGIN_SRCS)
 
+if CROSS_COMPILING
 ptimec$(BUILD_EXEEXT): ptimec.c
-	$(AM_V_CC) $(CC_FOR_BUILD) $(CPPFLAGS_FOR_BUILD) $(LDFLAGS_FOR_BUILD) -g3 -o $@ $?
+	$(AM_V_CC) $(CC_FOR_BUILD) $(CPPFLAGS_FOR_BUILD) $(LDFLAGS_FOR_BUILD) -g3 -o $@ $? -fPIE
+else
+ptimec$(BUILD_EXEEXT): ptimec.c
+	$(AM_V_CC) $(CC) $(CPPFLAGS) $(LDFLAGS) -g3 -o $@ $? -fPIE
+endif
 
 if HAVE_RE2C
 RE2C_FILES = data_scanner_re.cc log_level_re.cc
@@ -534,7 +543,7 @@ uncrusty:
 	(cd $(srcdir) && uncrustify -c ../lnav.cfg --replace $(SOURCES) \
 		$(HEADERS))
 
-if !DISABLE_DOCUMENTATION
+if !CROSS_COMPILING
 all-local: $(LNAV_BUILT_FILES) lnav
 	if test -w $(srcdir)/internals; then \
 		env DUMP_INTERNALS_DIR=$(srcdir)/internals DUMP_CRASH=1 ./lnav Makefile; \

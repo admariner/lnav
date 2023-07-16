@@ -226,6 +226,7 @@ dist_noinst_DATA = \
     expected/test_tailer.sh_12f539e535df04364316699f9edeac461aa9f9de.err \
     expected/test_tailer.sh_12f539e535df04364316699f9edeac461aa9f9de.out \
 	ansi-colors.0.in \
+	bad-config/formats/invalid-file-format/format.json \
 	bad-config/formats/invalid-json-format/format.json \
 	bad-config/formats/invalid-properties/format.json \
 	bad-config/formats/invalid-regex/format.json \
@@ -235,6 +236,7 @@ dist_noinst_DATA = \
 	bad-config/formats/invalid-sql/init2.sql \
 	bad-config/formats/no-regexes/format.json \
 	bad-config/formats/no-samples/format.json \
+	bad-config2/configs/invalid-theme/config.json \
 	bad-config2/formats/invalid-config/config.json \
 	bad-config2/formats/invalid-config/config.bad-schema.json \
 	bad-config2/formats/invalid-config/config.malformed.json \
@@ -270,6 +272,7 @@ dist_noinst_DATA = \
 	dhcp.pcapng \
 	dhcp-trunc.pcapng \
 	expected_help.txt \
+	invalid-books.xml \
 	listview_output.0 \
 	listview_output.1 \
 	listview_output.2 \
@@ -277,6 +280,13 @@ dist_noinst_DATA = \
 	listview_output.4 \
 	listview_output.5 \
 	listview_output.6 \
+	listview_output_cursor.0 \
+	listview_output_cursor.1 \
+	listview_output_cursor.2 \
+	listview_output_cursor.3 \
+	listview_output_cursor.4 \
+	listview_output_cursor.5 \
+	listview_output_cursor.6 \
 	log.clog \
 	logfile_access_log.0 \
 	logfile_access_log.1 \
@@ -289,7 +299,9 @@ dist_noinst_DATA = \
 	logfile_blued.0 \
 	logfile_bro_conn.log.0 \
 	logfile_bro_http.log.0 \
+	logfile_bunyan.0 \
 	logfile_crlf.0 \
+	logfile_cloudflare.json \
 	logfile_cxx.0 \
 	logfile_empty.0 \
 	logfile_epoch.0 \
@@ -354,6 +366,7 @@ dist_noinst_DATA = \
 	mvwattrline_output.0 \
 	textfile_0.md \
 	textfile_ansi.0 \
+	textfile_ansi_expanding.0 \
 	textfile_json_indented.0 \
 	textfile_json_one_line.0 \
 	textfile_quoted_json.0 \
@@ -365,6 +378,8 @@ dist_noinst_DATA = \
 	vt52_curses_output.0 \
 	vt52_curses_output.1 \
 	xpath_tui.0 \
+	configs/installed/hw-url-handler.json \
+	configs/installed/hw-url-handler.lnav \
 	formats/collision/format.json \
 	formats/customlevel/format.json \
 	formats/jsontest/format.json \

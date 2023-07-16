@@ -33,9 +33,7 @@
                         "background-color": "$base3"
                     },
                     "alt-text": {
-                        "color": "$base00",
-                        "background-color": "$base3",
-                        "bold": true
+                        "background-color": "$base2"
                     },
                     "ok": {
                         "color": "$green",
@@ -52,6 +50,12 @@
                     "hidden": {
                         "color": "$yellow",
                         "bold": true
+                    },
+                    "cursor-line": {
+                        "color": "$cyan",
+                        "background-color": "$red",
+                        "bold": true,
+                        "underline": true
                     },
                     "adjusted-time": {
                         "color": "$magenta"

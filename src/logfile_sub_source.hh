@@ -95,7 +95,7 @@ public:
 
     bool matches(const logfile& lf,
                  logfile::const_iterator ll,
-                 shared_buffer_ref& line) override
+                 const shared_buffer_ref& line) override
     {
         return this->pf_pcre->find_in(line.to_string_fragment())
             .ignore_error()
@@ -126,7 +126,7 @@ public:
 
     bool matches(const logfile& lf,
                  logfile::const_iterator ll,
-                 shared_buffer_ref& line) override;
+                 const shared_buffer_ref& line) override;
 
     std::string to_command() const override;
 
@@ -240,6 +240,7 @@ private:
 class logfile_sub_source
     : public text_sub_source
     , public text_time_translator
+    , public text_accel_source
     , public list_input_delegate {
 public:
     const static bookmark_type_t BM_ERRORS;
@@ -252,72 +253,11 @@ public:
 
     ~logfile_sub_source() = default;
 
-    void toggle_time_offset()
-    {
-        this->lss_flags ^= F_TIME_OFFSET;
-        this->clear_line_size_cache();
-    }
+    void increase_line_context();
 
-    void increase_line_context()
-    {
-        auto old_flags = this->lss_flags;
+    bool decrease_line_context();
 
-        if (this->lss_flags & F_FILENAME) {
-            // Nothing to do
-        } else if (this->lss_flags & F_BASENAME) {
-            this->lss_flags &= ~F_NAME_MASK;
-            this->lss_flags |= F_FILENAME;
-        } else {
-            this->lss_flags |= F_BASENAME;
-        }
-        if (old_flags != this->lss_flags) {
-            this->clear_line_size_cache();
-        }
-    }
-
-    bool decrease_line_context()
-    {
-        auto old_flags = this->lss_flags;
-
-        if (this->lss_flags & F_FILENAME) {
-            this->lss_flags &= ~F_NAME_MASK;
-            this->lss_flags |= F_BASENAME;
-        } else if (this->lss_flags & F_BASENAME) {
-            this->lss_flags &= ~F_NAME_MASK;
-        }
-        if (old_flags != this->lss_flags) {
-            this->clear_line_size_cache();
-
-            return true;
-        }
-
-        return false;
-    }
-
-    size_t get_filename_offset() const
-    {
-        if (this->lss_flags & F_FILENAME) {
-            return this->lss_filename_width;
-        } else if (this->lss_flags & F_BASENAME) {
-            return this->lss_basename_width;
-        }
-
-        return 0;
-    }
-
-    void set_time_offset(bool enabled)
-    {
-        if (enabled)
-            this->lss_flags |= F_TIME_OFFSET;
-        else
-            this->lss_flags &= ~F_TIME_OFFSET;
-        this->clear_line_size_cache();
-    }
-
-    bool is_time_offset_enabled() const
-    {
-        return (bool) (this->lss_flags & F_TIME_OFFSET);
-    }
+    size_t get_filename_offset() const;
 
     bool is_filename_enabled() const
     {
@@ -372,20 +312,7 @@ public:
         }
     }
 
-    void clear_min_max_log_times()
-    {
-        if (this->lss_min_log_time.tv_sec != 0
-            || this->lss_min_log_time.tv_usec != 0
-            || this->lss_max_log_time.tv_sec
-                != std::numeric_limits<time_t>::max()
-            || this->lss_max_log_time.tv_usec != 0)
-        {
-            memset(&this->lss_min_log_time, 0, sizeof(this->lss_min_log_time));
-            this->lss_max_log_time.tv_sec = std::numeric_limits<time_t>::max();
-            this->lss_max_log_time.tv_usec = 0;
-            this->text_filters_changed();
-        }
-    }
+    void clear_min_max_log_times();
 
     bool list_input_handle_key(listview_curses& lv, int ch);
 
@@ -406,19 +333,7 @@ public:
         return this->lss_longest_line;
     }
 
-    size_t file_count() const
-    {
-        size_t retval = 0;
-        const_iterator iter;
-
-        for (iter = this->cbegin(); iter != this->cend(); ++iter) {
-            if (*iter != nullptr && (*iter)->get_file() != nullptr) {
-                retval += 1;
-            }
-        }
-
-        return retval;
-    }
+    size_t file_count() const;
 
     bool empty() const { return this->lss_filtered_index.empty(); }
 
@@ -431,19 +346,7 @@ public:
                              int row,
                              string_attrs_t& value_out);
 
-    size_t text_size_for_line(textview_curses& tc, int row, line_flags_t flags)
-    {
-        size_t index = row % LINE_SIZE_CACHE_SIZE;
-
-        if (this->lss_line_size_cache[index].first != row) {
-            std::string value;
-
-            this->text_value_for_line(tc, row, value, flags);
-            this->lss_line_size_cache[index].second = value.size();
-            this->lss_line_size_cache[index].first = row;
-        }
-        return this->lss_line_size_cache[index].second;
-    }
+    size_t text_size_for_line(textview_curses& tc, int row, line_flags_t flags);
 
     void text_mark(const bookmark_type_t* bm, vis_line_t line, bool added);
 
@@ -504,17 +407,7 @@ public:
         return this->lss_index.size() - this->lss_filtered_index.size();
     }
 
-    int get_filtered_count_for(size_t filter_index) const
-    {
-        int retval = 0;
-
-        for (const auto& ld : this->lss_files) {
-            retval += ld->ld_filter_state.lfo_filter_state
-                          .tfs_filter_hits[filter_index];
-        }
-
-        return retval;
-    }
+    int get_filtered_count_for(size_t filter_index) const;
 
     Result<void, lnav::console::user_message> set_sql_filter(
         std::string stmt_str, sqlite3_stmt* stmt);
@@ -649,8 +542,6 @@ public:
     {
         return logline_window(*this, start_vl, end_vl);
     }
-
-    log_accel::direction_t get_line_accel_direction(vis_line_t vl);
 
     /**
      * Container for logfile references that keeps of how many lines in the
@@ -834,25 +725,6 @@ public:
 
     void quiesce();
 
-private:
-    static const size_t LINE_SIZE_CACHE_SIZE = 512;
-
-    enum {
-        B_SCRUB,
-        B_TIME_OFFSET,
-        B_FILENAME,
-        B_BASENAME,
-    };
-
-    enum {
-        F_SCRUB = (1UL << B_SCRUB),
-        F_TIME_OFFSET = (1UL << B_TIME_OFFSET),
-        F_FILENAME = (1UL << B_FILENAME),
-        F_BASENAME = (1UL << B_BASENAME),
-
-        F_NAME_MASK = (F_FILENAME | F_BASENAME),
-    };
-
     struct __attribute__((__packed__)) indexed_content {
         indexed_content() = default;
 
@@ -866,101 +738,31 @@ private:
         uint64_t ic_value : 40;
     };
 
-    struct logline_cmp {
-        logline_cmp(logfile_sub_source& lc) : llss_controller(lc) {}
+    big_array<indexed_content> lss_index;
 
-        bool operator()(const content_line_t& lhs,
-                        const content_line_t& rhs) const
-        {
-            logline* ll_lhs = this->llss_controller.find_line(lhs);
-            logline* ll_rhs = this->llss_controller.find_line(rhs);
+protected:
+    void text_accel_display_changed() { this->clear_line_size_cache(); }
 
-            return (*ll_lhs) < (*ll_rhs);
-        }
+    logline* text_accel_get_line(vis_line_t vl)
+    {
+        return this->find_line(this->at(vl));
+    }
 
-        bool operator()(const uint32_t& lhs, const uint32_t& rhs) const
-        {
-            content_line_t cl_lhs
-                = (content_line_t) llss_controller.lss_index[lhs];
-            content_line_t cl_rhs
-                = (content_line_t) llss_controller.lss_index[rhs];
-            logline* ll_lhs = this->llss_controller.find_line(cl_lhs);
-            logline* ll_rhs = this->llss_controller.find_line(cl_rhs);
+private:
+    static const size_t LINE_SIZE_CACHE_SIZE = 512;
 
-            return (*ll_lhs) < (*ll_rhs);
-        }
-#if 0
-        bool operator()(const indexed_content &lhs, const indexed_content &rhs)
-        {
-            logline *ll_lhs = this->llss_controller.find_line(lhs.ic_value);
-            logline *ll_rhs = this->llss_controller.find_line(rhs.ic_value);
-
-            return (*ll_lhs) < (*ll_rhs);
-        }
-#endif
-
-        bool operator()(const content_line_t& lhs, const time_t& rhs) const
-        {
-            logline* ll_lhs = this->llss_controller.find_line(lhs);
-
-            return *ll_lhs < rhs;
-        }
-
-        bool operator()(const content_line_t& lhs,
-                        const struct timeval& rhs) const
-        {
-            logline* ll_lhs = this->llss_controller.find_line(lhs);
-
-            return *ll_lhs < rhs;
-        }
-
-        logfile_sub_source& llss_controller;
+    enum {
+        B_SCRUB,
+        B_FILENAME,
+        B_BASENAME,
     };
 
-    struct filtered_logline_cmp {
-        filtered_logline_cmp(const logfile_sub_source& lc) : llss_controller(lc)
-        {
-        }
+    enum {
+        F_SCRUB = (1UL << B_SCRUB),
+        F_FILENAME = (1UL << B_FILENAME),
+        F_BASENAME = (1UL << B_BASENAME),
 
-        bool operator()(const uint32_t& lhs, const uint32_t& rhs) const
-        {
-            content_line_t cl_lhs
-                = (content_line_t) llss_controller.lss_index[lhs];
-            content_line_t cl_rhs
-                = (content_line_t) llss_controller.lss_index[rhs];
-            logline* ll_lhs = this->llss_controller.find_line(cl_lhs);
-            logline* ll_rhs = this->llss_controller.find_line(cl_rhs);
-
-            return (*ll_lhs) < (*ll_rhs);
-        }
-
-        bool operator()(const uint32_t& lhs, const struct timeval& rhs) const
-        {
-            content_line_t cl_lhs
-                = (content_line_t) llss_controller.lss_index[lhs];
-            logline* ll_lhs = this->llss_controller.find_line(cl_lhs);
-
-            return (*ll_lhs) < rhs;
-        }
-
-        const logfile_sub_source& llss_controller;
-    };
-
-    /**
-     * Functor for comparing the ld_file field of the logfile_data struct.
-     */
-    struct logfile_data_eq {
-        explicit logfile_data_eq(std::shared_ptr<logfile> lf)
-            : lde_file(std::move(lf))
-        {
-        }
-
-        bool operator()(const std::unique_ptr<logfile_data>& ld) const
-        {
-            return this->lde_file == ld->get_file();
-        }
-
-        std::shared_ptr<logfile> lde_file;
+        F_NAME_MASK = (F_FILENAME | F_BASENAME),
     };
 
     void clear_line_size_cache()
@@ -977,7 +779,6 @@ private:
     bool lss_force_rebuild{false};
     std::vector<std::unique_ptr<logfile_data>> lss_files;
 
-    big_array<indexed_content> lss_index;
     std::vector<uint32_t> lss_filtered_index;
     auto_mem<sqlite3_stmt> lss_preview_filter_stmt{sqlite3_finalize};
 

@@ -39,10 +39,10 @@
 #include <string.h>
 #include <sys/types.h>
 
-#include "base/attr_line.hh"
 #include "base/auto_mem.hh"
 #include "base/file_range.hh"
 #include "base/intern_string.hh"
+#include "base/line_range.hh"
 #include "base/lnav_log.hh"
 #include "scn/util/string_view.h"
 
@@ -112,13 +112,18 @@ public:
 
     file_range::metadata& get_metadata() { return this->sb_metadata; }
 
-    char* get_writable_data()
+    char* get_writable_data(size_t length)
     {
-        if (this->take_ownership()) {
+        if (this->take_ownership(length)) {
             return const_cast<char*>(this->sb_data);
         }
 
         return nullptr;
+    }
+
+    char* get_writable_data()
+    {
+        return this->get_writable_data(this->sb_length);
     }
 
     string_fragment to_string_fragment(off_t offset, size_t len) const
@@ -151,7 +156,9 @@ public:
 
     void erase_ansi();
 
-    bool take_ownership();
+    bool take_ownership(size_t length);
+
+    bool take_ownership() { return this->take_ownership(this->sb_length); }
 
     void disown();
 
@@ -185,20 +192,6 @@ public:
     }
 
     std::vector<shared_buffer_ref*> sb_refs;
-};
-
-struct tmp_shared_buffer {
-    explicit tmp_shared_buffer(const char* str, size_t len = -1)
-    {
-        if (len == (size_t) -1) {
-            len = strlen(str);
-        }
-
-        this->tsb_ref.share(this->tsb_manager, (char*) str, len);
-    };
-
-    shared_buffer tsb_manager;
-    shared_buffer_ref tsb_ref;
 };
 
 inline std::string

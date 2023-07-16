@@ -80,6 +80,17 @@ struct json_path_handler : public json_path_handler_base {
     }
 
     template<typename P>
+    json_path_handler(P path,
+                      int (*number_func)(yajlpp_parse_context*,
+                                         const char* numberVal,
+                                         size_t numberLen))
+        : json_path_handler_base(path)
+    {
+        this->jph_callbacks.yajl_number
+            = (int (*)(void*, const char*, size_t)) number_func;
+    }
+
+    template<typename P>
     json_path_handler(P path) : json_path_handler_base(path)
     {
     }
@@ -122,6 +133,15 @@ struct json_path_handler : public json_path_handler_base {
     json_path_handler& add_cb(int (*double_func)(yajlpp_parse_context*, double))
     {
         this->jph_callbacks.yajl_double = (int (*)(void*, double)) double_func;
+        return *this;
+    }
+
+    json_path_handler& add_cb(int (*number_func)(yajlpp_parse_context*,
+                                                 const char*,
+                                                 size_t))
+    {
+        this->jph_callbacks.yajl_number
+            = (int (*)(void*, const char*, size_t)) number_func;
         return *this;
     }
 
@@ -221,11 +241,13 @@ struct json_path_handler : public json_path_handler_base {
 
     static int null_field_cb(yajlpp_parse_context* ypc)
     {
+        ypc->fill_in_source();
         return ypc->ypc_current_handler->jph_null_cb(ypc);
     }
 
     static int bool_field_cb(yajlpp_parse_context* ypc, int val)
     {
+        ypc->fill_in_source();
         return ypc->ypc_current_handler->jph_bool_cb(ypc, val);
     }
 
@@ -233,16 +255,19 @@ struct json_path_handler : public json_path_handler_base {
                              const unsigned char* str,
                              size_t len)
     {
+        ypc->fill_in_source();
         return ypc->ypc_current_handler->jph_str_cb(ypc, str, len);
     }
 
     static int int_field_cb(yajlpp_parse_context* ypc, long long val)
     {
+        ypc->fill_in_source();
         return ypc->ypc_current_handler->jph_integer_cb(ypc, val);
     }
 
     static int dbl_field_cb(yajlpp_parse_context* ypc, double val)
     {
+        ypc->fill_in_source();
         return ypc->ypc_current_handler->jph_double_cb(ypc, val);
     }
 
@@ -504,6 +529,28 @@ struct json_path_handler : public json_path_handler_base {
                 = std::string((const char*) str, len);
 
             return 1;
+        };
+        this->jph_path_provider =
+            [args...](void* root, std::vector<std::string>& paths_out) {
+                const auto& field = json_path_handler::get_field(root, args...);
+
+                for (const auto& pair : field) {
+                    paths_out.emplace_back(pair.first);
+                }
+            };
+        this->jph_field_getter
+            = [args...](void* root,
+                        nonstd::optional<std::string> name) -> const void* {
+            const auto& field = json_path_handler::get_field(root, args...);
+            if (!name) {
+                return &field;
+            }
+
+            auto iter = field.find(name.value());
+            if (iter == field.end()) {
+                return nullptr;
+            }
+            return (void*) &iter->second;
         };
         this->jph_gen_callback = [args...](yajlpp_gen_context& ygc,
                                            const json_path_handler_base& jph,
@@ -795,6 +842,14 @@ struct json_path_handler : public json_path_handler_base {
 
             return 1;
         };
+        this->add_cb(null_field_cb);
+        this->jph_null_cb = [args...](yajlpp_parse_context* ypc) {
+            auto* obj = ypc->ypc_obj_stack.top();
+
+            json_path_handler::get_field(obj, args...) = nonstd::nullopt;
+
+            return 1;
+        };
         this->jph_gen_callback = [args...](yajlpp_gen_context& ygc,
                                            const json_path_handler_base& jph,
                                            yajl_gen handle) {
@@ -877,6 +932,10 @@ struct json_path_handler : public json_path_handler_base {
 
             return gen(field.pp_value);
         };
+        this->jph_field_getter
+            = [args...](void* root, nonstd::optional<std::string> name) {
+                  return (void*) &json_path_handler::get_field(root, args...);
+              };
         return *this;
     }
 
@@ -1309,7 +1368,9 @@ public:
         const string_fragment& json)
     {
         if (this->yp_parse_context.parse_doc(json)) {
-            return Ok(std::move(this->yp_obj));
+            if (this->yp_errors.empty()) {
+                return Ok(std::move(this->yp_obj));
+            }
         }
 
         return Err(std::move(this->yp_errors));
@@ -1380,7 +1441,7 @@ template<typename T, std::size_t N>
 inline json_path_handler
 pattern_property_handler(const T (&path)[N])
 {
-    return {lnav::pcre2pp::code::from_const(path).to_shared()};
+    return {lnav::pcre2pp::code::from_const(path, PCRE2_ANCHORED).to_shared()};
 }
 
 }  // namespace yajlpp

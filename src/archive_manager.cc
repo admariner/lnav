@@ -29,6 +29,8 @@
  * @file archive_manager.cc
  */
 
+#include <future>
+
 #include <unistd.h>
 
 #include "config.h"
@@ -48,7 +50,7 @@
 #include "base/lnav_log.hh"
 #include "base/paths.hh"
 #include "fmt/format.h"
-#include "lnav_util.hh"
+#include "hasher.hh"
 
 namespace fs = ghc::filesystem;
 
@@ -143,7 +145,7 @@ filename_to_tmp_path(const std::string& filename)
     hasher h;
 
     h.update(basename);
-    auto fd = auto_fd(lnav::filesystem::openp(filename, O_RDONLY));
+    auto fd = auto_fd(lnav::filesystem::openp(filename, O_RDONLY | O_CLOEXEC));
     if (fd != -1) {
         char buffer[1024];
         int rc;
@@ -226,9 +228,10 @@ extract(const std::string& filename, const extract_cb& cb)
 
     fs::create_directories(tmp_path.parent_path(), ec);
     if (ec) {
-        return Err(fmt::format("unable to create directory: {} -- {}",
-                               tmp_path.parent_path().string(),
-                               ec.message()));
+        return Err(
+            fmt::format(FMT_STRING("unable to create directory: {} -- {}"),
+                        tmp_path.parent_path().string(),
+                        ec.message()));
     }
 
     auto arc_lock = lnav::filesystem::file_lock(tmp_path);

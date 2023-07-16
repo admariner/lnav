@@ -38,7 +38,6 @@
 
 #include "base/auto_fd.hh"
 #include "base/lnav.console.hh"
-#include "bookmarks.hh"
 #include "fmt/format.h"
 #include "ghc/filesystem.hpp"
 #include "help_text.hh"
@@ -72,15 +71,9 @@ struct exec_context {
                  sql_callback_t sql_callback = ::sql_callback,
                  pipe_callback_t pipe_callback = nullptr);
 
-    bool is_read_write() const
-    {
-        return this->ec_perms == perm_t::READ_WRITE;
-    }
+    bool is_read_write() const { return this->ec_perms == perm_t::READ_WRITE; }
 
-    bool is_read_only() const
-    {
-        return this->ec_perms == perm_t::READ_ONLY;
-    }
+    bool is_read_only() const { return this->ec_perms == perm_t::READ_ONLY; }
 
     exec_context& with_perms(perm_t perms)
     {
@@ -91,15 +84,22 @@ struct exec_context {
     void add_error_context(lnav::console::user_message& um);
 
     template<typename... Args>
-    Result<std::string, lnav::console::user_message> make_error(
-        fmt::string_view format_str, const Args&... args)
+    lnav::console::user_message make_error_msg(fmt::string_view format_str,
+                                               const Args&... args)
     {
         auto retval = lnav::console::user_message::error(
             fmt::vformat(format_str, fmt::make_format_args(args...)));
 
         this->add_error_context(retval);
 
-        return Err(retval);
+        return retval;
+    }
+
+    template<typename... Args>
+    Result<std::string, lnav::console::user_message> make_error(
+        fmt::string_view format_str, const Args&... args)
+    {
+        return Err(this->make_error_msg(format_str, args...));
     }
 
     nonstd::optional<FILE*> get_output()
@@ -119,6 +119,37 @@ struct exec_context {
     void set_output(const std::string& name, FILE* file, int (*closer)(FILE*));
 
     void clear_output();
+
+    struct user {};
+    struct file_open {
+        std::string fo_name;
+    };
+
+    using provenance_t = mapbox::util::variant<user, file_open>;
+
+    struct provenance_guard {
+        explicit provenance_guard(exec_context* context, provenance_t prov)
+            : pg_context(context)
+        {
+            this->pg_context->ec_provenance.push_back(prov);
+        }
+
+        provenance_guard(const provenance_guard&) = delete;
+        provenance_guard(provenance_guard&& other)
+            : pg_context(other.pg_context)
+        {
+            other.pg_context = nullptr;
+        }
+
+        ~provenance_guard()
+        {
+            if (this->pg_context != nullptr) {
+                this->pg_context->ec_provenance.pop_back();
+            }
+        }
+
+        exec_context* pg_context;
+    };
 
     struct source_guard {
         source_guard(exec_context* context) : sg_context(context) {}
@@ -214,13 +245,25 @@ struct exec_context {
         this->ec_local_vars.pop();
     }
 
+    template<typename T>
+    nonstd::optional<T> get_provenance() const
+    {
+        for (const auto& elem : this->ec_provenance) {
+            if (elem.is<T>()) {
+                return elem.get<T>();
+            }
+        }
+
+        return nonstd::nullopt;
+    }
+
     vis_line_t ec_top_line{0_vl};
     bool ec_dry_run{false};
     perm_t ec_perms{perm_t::READ_WRITE};
 
-    std::map<std::string, std::string> ec_override;
     logline_value_vector* ec_line_values;
     std::stack<std::map<std::string, scoped_value_t>> ec_local_vars;
+    std::vector<provenance_t> ec_provenance;
     std::map<std::string, scoped_value_t> ec_global_vars;
     std::vector<ghc::filesystem::path> ec_path_stack;
     std::vector<lnav::console::snippet> ec_source;

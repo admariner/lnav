@@ -6,6 +6,24 @@
            [1m/bad_json_log/line-format#/timestamp-format[0m [4m<string>[0m
          [1mDescription[0m
            The strftime(3) format for this field
+[33m⚠ warning[0m: unexpected value for property “[1m/bad-name-log/title[0m”
+[36m --> [0m[1m{test_dir}/bad-config/formats/invalid-name/format.json[0m:4
+[36m | [0m[37m[40m        "title": "bad-format",          [0m
+[36m =[0m   [36mhelp[0m: [1mAvailable Properties[0m
+           [1m$schema[0m [4mThe URI of the schema for this file[0m
+           [1m(\w+)[0m[1m/[0m
+[33m⚠ warning[0m: unexpected value for property “[1m/bad-name-log/description[0m”
+[36m --> [0m[1m{test_dir}/bad-config/formats/invalid-name/format.json[0m:5
+[36m | [0m[37m[40m        "description": "Log format with a name that has invalid characters",[0m
+[36m =[0m   [36mhelp[0m: [1mAvailable Properties[0m
+           [1m$schema[0m [4mThe URI of the schema for this file[0m
+           [1m(\w+)[0m[1m/[0m
+[33m⚠ warning[0m: unexpected value for property “[1m/bad-name-log/json[0m”
+[36m --> [0m[1m{test_dir}/bad-config/formats/invalid-name/format.json[0m:6
+[36m | [0m[37m[40m        "json": true                    [0m
+[36m =[0m   [36mhelp[0m: [1mAvailable Properties[0m
+           [1m$schema[0m [4mThe URI of the schema for this file[0m
+           [1m(\w+)[0m[1m/[0m
 [1m[31m✘ error[0m: “invalid(abc” is not a valid regular expression
  [1m[31mreason[0m: missing closing parenthesis
 [36m --> [0m[1m/invalid_props_log/tags/badtag3/pattern[0m
@@ -86,6 +104,13 @@
            [1m/$schema[0m [4mThe URI of the schema for this file[0m
          [1mDescription[0m
            Specifies the type of this file
+[1m[31m✘ error[0m: SQL expression is invalid
+ [1m[31mreason[0m: unrecognized token: "'foobar"
+[36m --> [0m[1m/bad_file_format1/converter/header/expr/default[0m
+[36m | [0m[37m[40m:header[0m[37m[40m [0m[1m[36m[40mREGEXP[0m[37m[40m [0m[1m[7m[31m[40m'[0m[37m[40mfoobar                  [0m
+[1m[31m✘ error[0m: A command is required when a converter is defined
+[36m --> [0m[1m{test_dir}/bad-config/formats/invalid-file-format/format.json[0m:4
+[36m =[0m [36mhelp[0m: The converter command transforms the file into a format that can be consumed by lnav
 [1m[31m✘ error[0m: invalid line format element “[1m/bad_json_log/line-format/0/field[0m”
  [1m[31mreason[0m: “” is not a defined value
 [36m --> [0m[1m{test_dir}/bad-config/formats/invalid-json-format/format.json[0m:7
@@ -98,24 +123,31 @@
 [36m =[0m [36mhelp[0m: update the regular expression to fully capture the sample message
 [1m[31m✘ error[0m: invalid sample log message: "abc: foo"
  [1m[31mreason[0m: unrecognized timestamp -- abc
-[36m --> [0m[1m{test_dir}/bad-config/formats/invalid-sample/format.json[0m:30
+[36m --> [0m[1m{test_dir}/bad-config/formats/invalid-sample/format.json[0m:34
 [36m =[0m [36mnote[0m: the following custom formats were tried:
            abc
            [36m^ [0m“[1m%i[0m”[36m matched up to here[0m
 [36m =[0m [36mhelp[0m: If the timestamp format is not supported by default, you can add a custom format with the “[1mtimestamp-format[0m” property
 [1m[31m✘ error[0m: invalid sample log message: "1428634687123| debug hello"
  [1m[31mreason[0m: “[1mdebug[0m” does not match the expected level of “[1minfo[0m”
-[36m --> [0m[1m{test_dir}/bad-config/formats/invalid-sample/format.json[0m:33
+[36m --> [0m[1m{test_dir}/bad-config/formats/invalid-sample/format.json[0m:37
 [36m =[0m [36mnote[0m: matched regex = [1mwith-level[0m
          captured level = “debug”
+         level regular expression match results:
+           [1m/bad_sample_log/level/debug[0m = debug
+             debug
+             [36m^[0m[36m---[0m[36m^[0m
+           [1m/bad_sample_log/level/info[0m = info
+             [33mno match[0m
+[36m =[0m [36mhelp[0m: Level regexes are not anchored to the start/end of the string.  Prepend “[1m^[0m” to the expression to match from the start of the string and append “[1m$[0m” to match up to the end of the string.
 [1m[31m✘ error[0m: invalid pattern: “[1mwith-level[0m”
  [1m[31mreason[0m: pattern does not match entire multiline sample message
-[36m --> [0m[1m{test_dir}/bad-config/formats/invalid-sample/format.json[0m:37
+[36m --> [0m[1m{test_dir}/bad-config/formats/invalid-sample/format.json[0m:41
 [36m =[0m [36mnote[0m: [1mwith-level[0m = [1m[36m^[0m[1m[32m([0m[1m[32m?[0m[1m[36m<[0mtimestamp>[1m\d[0m[1m[36m+[0m[1m[32m)[0m\| [1m[32m([0m[1m[32m?[0m[1m[36m<[0mlevel>[1m\w[0m[1m[36m+[0m[1m[32m)[0m [1m[32m([0m[1m[32m?[0m[1m[36m<[0mbody>[1m\w[0m[1m[36m+[0m[1m[32m)[0m[1m[36m$[0m
 [36m =[0m [36mhelp[0m: use “.*” to match new-lines
 [1m[31m✘ error[0m: invalid sample log message: "1428634687123; foo bar"
  [1m[31mreason[0m: sample does not match any patterns
-[36m --> [0m[1m{test_dir}/bad-config/formats/invalid-sample/format.json[0m:41
+[36m --> [0m[1m{test_dir}/bad-config/formats/invalid-sample/format.json[0m:45
 [36m =[0m [36mnote[0m: the following shows how each pattern matched this sample:
             [37m[40m1428634687123; foo bar[0m
                          [36m^ [0m[1mbad-time[0m[36m matched up to here[0m

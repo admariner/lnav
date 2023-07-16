@@ -43,6 +43,7 @@
 #include "highlighter.hh"
 #include "listview_curses.hh"
 #include "lnav_config_fwd.hh"
+#include "log_accel.hh"
 #include "logfile_fwd.hh"
 #include "ring_span.hh"
 #include "text_format.hh"
@@ -119,13 +120,13 @@ public:
 
     void add_line(logfile_filter_state& lfs,
                   logfile_const_iterator ll,
-                  shared_buffer_ref& line);
+                  const shared_buffer_ref& line);
 
     void end_of_message(logfile_filter_state& lfs);
 
     virtual bool matches(const logfile& lf,
                          logfile_const_iterator ll,
-                         shared_buffer_ref& line)
+                         const shared_buffer_ref& line)
         = 0;
 
     virtual std::string to_command() const = 0;
@@ -151,7 +152,7 @@ public:
 
     bool matches(const logfile& lf,
                  logfile_const_iterator ll,
-                 shared_buffer_ref& line) override;
+                 const shared_buffer_ref& line) override;
 
     std::string to_command() const override;
 };
@@ -235,6 +236,43 @@ protected:
     struct timeval ttt_top_time {
         0, 0
     };
+};
+
+class text_accel_source {
+public:
+    virtual ~text_accel_source() = default;
+
+    virtual log_accel::direction_t get_line_accel_direction(vis_line_t vl);
+
+    void toggle_time_offset()
+    {
+        this->tas_display_time_offset = !this->tas_display_time_offset;
+        this->text_accel_display_changed();
+    }
+
+    void set_time_offset(bool enabled)
+    {
+        if (this->tas_display_time_offset != enabled) {
+            this->tas_display_time_offset = enabled;
+            this->text_accel_display_changed();
+        }
+    }
+
+    bool is_time_offset_enabled() const
+    {
+        return this->tas_display_time_offset;
+    }
+
+    virtual bool is_time_offset_supported() const { return true; }
+
+    virtual logline* text_accel_get_line(vis_line_t vl) = 0;
+
+    std::string get_time_offset_for_line(textview_curses& tc, vis_line_t vl);
+
+protected:
+    virtual void text_accel_display_changed() {}
+
+    bool tas_display_time_offset{false};
 };
 
 class text_anchors {
@@ -604,7 +642,7 @@ public:
         tv.tv_usec = (ms_to_deadline % 1000) * 1000;
         gettimeofday(&now, nullptr);
         timeradd(&now, &tv, &this->tc_follow_deadline);
-        this->tc_follow_top = this->get_top();
+        this->tc_follow_selection = this->get_selection();
         this->tc_follow_func = func;
     }
 
@@ -700,7 +738,19 @@ public:
         listview_curses::invoke_scroll();
     }
 
+    textview_curses& set_reload_config_delegate(
+        std::function<void(textview_curses&)> func)
+    {
+        this->tc_reload_config_delegate = std::move(func);
+        if (this->tc_reload_config_delegate) {
+            this->tc_reload_config_delegate(*this);
+        }
+        return *this;
+    }
+
     std::function<void(textview_curses&)> tc_state_event_handler;
+
+    nonstd::optional<role_t> tc_cursor_role;
 
 protected:
     class grep_highlighter {
@@ -741,7 +791,7 @@ protected:
     struct timeval tc_follow_deadline {
         0, 0
     };
-    vis_line_t tc_follow_top{-1_vl};
+    vis_line_t tc_follow_selection{-1_vl};
     std::function<bool()> tc_follow_func;
     action tc_search_action;
 
@@ -758,6 +808,7 @@ protected:
     std::string tc_previous_search;
     std::shared_ptr<grep_highlighter> tc_search_child;
     std::shared_ptr<grep_proc<vis_line_t>> tc_source_search_child;
+    std::function<void(textview_curses&)> tc_reload_config_delegate;
 };
 
 #endif

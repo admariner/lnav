@@ -75,6 +75,7 @@
 
 #include "all_logs_vtab.hh"
 #include "base/ansi_scrubber.hh"
+#include "base/ansi_vars.hh"
 #include "base/fs_util.hh"
 #include "base/func_util.hh"
 #include "base/future_util.hh"
@@ -114,7 +115,7 @@
 #include "log_vtab_impl.hh"
 #include "logfile.hh"
 #include "logfile_sub_source.hh"
-#include "piper_proc.hh"
+#include "piper.looper.hh"
 #include "readline_curses.hh"
 #include "readline_highlighters.hh"
 #include "regexp_vtab.hh"
@@ -201,24 +202,24 @@ const std::vector<std::string> lnav_zoom_strings = {
 };
 
 static const std::vector<std::string> DEFAULT_DB_KEY_NAMES = {
-    "match_index",
-    "capture_index",
     "capture_count",
+    "capture_index",
+    "device",
+    "id",
+    "inode",
+    "key",
+    "match_index",
+    "parent",
     "range_start",
     "range_stop",
-    "inode",
-    "device",
-    "inode",
     "rowid",
     "st_dev",
+    "st_gid",
     "st_ino",
     "st_mode",
     "st_rdev",
     "st_uid",
-    "st_gid",
 };
-
-const static size_t MAX_STDIN_CAPTURE_SIZE = 10 * 1024 * 1024;
 
 static auto bound_pollable_supervisor
     = injector::bind<pollable_supervisor>::to_singleton();
@@ -321,7 +322,7 @@ setup_logline_table(exec_context& ec)
 
     if (log_view.get_inner_height()) {
         static intern_string_t logline = intern_string::lookup("logline");
-        vis_line_t vl = log_view.get_top();
+        vis_line_t vl = log_view.get_selection();
         content_line_t cl = lnav_data.ld_log_source.at_base(vl);
 
         lnav_data.ld_vtab_manager->unregister_vtab(logline);
@@ -454,7 +455,13 @@ append_default_files()
 static void
 sigint(int sig)
 {
+    static size_t counter = 0;
+
     lnav_data.ld_looping = false;
+    counter += 1;
+    if (counter >= 3) {
+        abort();
+    }
 }
 
 static void
@@ -537,11 +544,14 @@ usage()
 
     ex3_term.append(lnav::roles::ok("$"))
         .append(" ")
-        .append(lnav::roles::file("make"))
-        .append(" 2>&1 | ")
         .append(lnav::roles::file("lnav"))
         .append(" ")
-        .append("-t"_symbol)
+        .append("-e"_symbol)
+        .append(" '")
+        .append(lnav::roles::file("make"))
+        .append(" ")
+        .append("-j4"_symbol)
+        .append("' ")
         .pad_to(40)
         .with_attr_for_all(VC_ROLE.value(role_t::VCR_QUOTED_CODE));
 
@@ -617,19 +627,6 @@ make it easier to navigate through files quickly.
         .append("         ")
         .append("Load older rotated log files as well.\n")
         .append("  ")
-        .append("-t"_symbol)
-        .append("         ")
-        .append(R"(Prepend timestamps to the lines of data being read in
-             from the standard input.
-)")
-        .append("  ")
-        .append("-w"_symbol)
-        .append(" ")
-        .append("file"_variable)
-        .append("    ")
-        .append("Write the contents of the standard input to this file.\n")
-        .append("\n")
-        .append("  ")
         .append("-c"_symbol)
         .append(" ")
         .append("cmd"_variable)
@@ -641,6 +638,12 @@ make it easier to navigate through files quickly.
         .append("file"_variable)
         .append("    ")
         .append("Execute the commands in the given file.\n")
+        .append("  ")
+        .append("-e"_symbol)
+        .append(" ")
+        .append("cmd"_variable)
+        .append("     ")
+        .append("Execute a shell command-line.\n")
         .append("  ")
         .append("-n"_symbol)
         .append("         ")
@@ -698,11 +701,18 @@ make it easier to navigate through files quickly.
         .append("\u2022"_list_glyph)
         .append(" To watch the output of ")
         .append(lnav::roles::file("make"))
-        .append(" with timestamps prepended:\n")
+        .append(":\n")
         .append("     ")
         .append(ex3_term)
         .append("\n\n")
         .append("Paths"_h2)
+        .append("\n ")
+        .append("\u2022"_list_glyph)
+        .append(" Format files are read from:")
+        .append("\n    \U0001F4C2 ")
+        .append(lnav::roles::file("/etc/lnav"))
+        .append("\n    \U0001F4C2 ")
+        .append(lnav::roles::file(SYSCONFDIR "/lnav"))
         .append("\n ")
         .append("\u2022"_list_glyph)
         .append(" Configuration, session, and format files are stored in:\n")
@@ -710,8 +720,8 @@ make it easier to navigate through files quickly.
         .append(lnav::roles::file(lnav::paths::dotlnav().string()))
         .append("\n\n ")
         .append("\u2022"_list_glyph)
-        .append(" Local copies of remote files and files extracted from\n")
-        .append("   archives are stored in:\n")
+        .append(" Local copies of remote files, files extracted from\n")
+        .append("   archives, execution output, and so on are stored in:\n")
         .append("    \U0001F4C2 ")
         .append(lnav::roles::file(lnav::paths::workdir().string()))
         .append("\n\n")
@@ -737,6 +747,20 @@ clear_last_user_mark(listview_curses* lv)
         lnav_data.ld_select_start.erase(tc);
         lnav_data.ld_last_user_mark.erase(tc);
     }
+}
+
+static void
+update_view_position(listview_curses* lv)
+{
+    lnav_data.ld_view_stack.top() | [lv](auto* top_lv) {
+        if (lv != top_lv) {
+            return;
+        }
+
+        lnav_data.ld_bottom_source.update_line_number(lv);
+        lnav_data.ld_bottom_source.update_percent(lv);
+        lnav_data.ld_bottom_source.update_marks(lv);
+    };
 }
 
 class lnav_behavior : public mouse_behavior {
@@ -955,18 +979,6 @@ match_escape_seq(const char* keyseq)
 static void
 gather_pipers()
 {
-    for (auto iter = lnav_data.ld_pipers.begin();
-         iter != lnav_data.ld_pipers.end();)
-    {
-        pid_t child_pid = (*iter)->get_child_pid();
-        if ((*iter)->has_exited()) {
-            log_info("child piper has exited -- %d", child_pid);
-            iter = lnav_data.ld_pipers.erase(iter);
-        } else {
-            ++iter;
-        }
-    }
-
     for (auto iter = lnav_data.ld_child_pollers.begin();
          iter != lnav_data.ld_child_pollers.end();)
     {
@@ -983,18 +995,31 @@ gather_pipers()
 static void
 wait_for_pipers()
 {
+    static const auto MAX_SLEEP_TIME = std::chrono::milliseconds(300);
+    auto sleep_time = std::chrono::milliseconds(10);
+
     for (;;) {
         gather_pipers();
-        if (lnav_data.ld_pipers.empty() && lnav_data.ld_child_pollers.empty()) {
+        auto piper_count = lnav_data.ld_active_files.active_pipers();
+        if (piper_count == 0 && lnav_data.ld_child_pollers.empty()) {
             log_debug("all pipers finished");
             break;
         }
-        usleep(10000);
+        // Use usleep() since it is defined to be interruptable by a signal.
+        auto urc = usleep(
+            std::chrono::duration_cast<std::chrono::microseconds>(sleep_time)
+                .count());
+        if (urc == -1 && errno == EINTR) {
+            log_trace("wait_for_pipers(): sleep interrupted");
+        }
         rebuild_indexes();
 
-        log_debug("%d pipers and %d children still active",
-                  lnav_data.ld_pipers.size(),
+        log_debug("%d pipers and %d children are still active",
+                  piper_count,
                   lnav_data.ld_child_pollers.size());
+        if (sleep_time < MAX_SLEEP_TIME) {
+            sleep_time = sleep_time * 2;
+        }
     }
 }
 
@@ -1185,7 +1210,6 @@ looper()
         (void) signal(SIGINT, sigint);
         (void) signal(SIGTERM, sigint);
         (void) signal(SIGWINCH, sigwinch);
-        (void) signal(SIGCHLD, sigchld);
 
         auto create_screen_res = screen_curses::create();
 
@@ -1204,6 +1228,8 @@ looper()
         auto_fd errpipe[2];
         auto_fd::pipe(errpipe);
 
+        errpipe[0].close_on_exec();
+        errpipe[1].close_on_exec();
         dup2(errpipe[1], STDERR_FILENO);
         errpipe[1].reset();
         log_pipe_err(errpipe[0]);
@@ -1304,12 +1330,7 @@ looper()
         lnav_data.ld_view_stack.push_back(&lnav_data.ld_views[LNV_LOG]);
 
         sb.push_back(clear_last_user_mark);
-        sb.push_back(bind_mem(&bottom_status_source::update_line_number,
-                              &lnav_data.ld_bottom_source));
-        sb.push_back(bind_mem(&bottom_status_source::update_percent,
-                              &lnav_data.ld_bottom_source));
-        sb.push_back(bind_mem(&bottom_status_source::update_marks,
-                              &lnav_data.ld_bottom_source));
+        sb.push_back(update_view_position);
         vsb.push_back(
             bind_mem(&term_extra::update_title, injector::get<term_extra*>()));
         vsb.push_back([](listview_curses* lv) {
@@ -1337,6 +1358,7 @@ looper()
                 vis_line_t(-(rlc->get_height() + 3)));
             lnav_data.ld_views[lpc].set_scroll_action(sb);
             lnav_data.ld_views[lpc].set_search_action(update_hits);
+            lnav_data.ld_views[lpc].tc_cursor_role = role_t::VCR_CURSOR_LINE;
             lnav_data.ld_views[lpc].tc_state_event_handler = event_handler;
         }
 
@@ -1446,13 +1468,13 @@ looper()
                 // pre-filled with a suggestion that the user can complete.
                 // This quick-fix key could be used for other stuff as well
                 lnav_data.ld_rl_view->set_value(fmt::format(
-                    ANSI_CSI ANSI_COLOR_PARAM(
+                    FMT_STRING(ANSI_CSI ANSI_COLOR_PARAM(
                         COLOR_YELLOW) ";" ANSI_BOLD_PARAM ANSI_CHAR_ATTR
                                       "Unrecognized key" ANSI_NORM
                                       ", bind to a command using "
                                       "\u2014 " ANSI_BOLD(
                                           ":config") " /ui/keymap-defs/{}/{}/"
-                                                     "command <cmd>",
+                                                     "command <cmd>"),
                     encoded_name,
                     keyseq));
                 alerter::singleton().chime("unrecognized key");
@@ -1902,6 +1924,7 @@ looper()
                         || lnav_data.ld_text_source.text_line_count() > 0
                         || !lnav_data.ld_active_files.fc_other_files.empty()))
                 {
+                    log_debug("restoring view states");
                     for (size_t view_index = 0; view_index < LNV__MAX;
                          view_index++)
                     {
@@ -1909,12 +1932,19 @@ looper()
                             = session_data.sd_view_states[view_index];
                         auto& tview = lnav_data.ld_views[view_index];
 
-                        if (vs.vs_top > 0 && tview.get_top() == 0_vl) {
+                        if (vs.vs_top >= 0
+                            && (view_index == LNV_LOG
+                                || tview.get_top() == 0_vl))
+                        {
                             log_info("restoring %s view top: %d",
                                      lnav_view_strings[view_index],
                                      vs.vs_top);
                             lnav_data.ld_views[view_index].set_top(
                                 vis_line_t(vs.vs_top));
+                            if (vs.vs_selection) {
+                                lnav_data.ld_views[view_index].set_selection(
+                                    vis_line_t(vs.vs_selection.value()));
+                            }
                         }
                     }
                     if (lnav_data.ld_mode == ln_mode_t::FILES) {
@@ -2075,12 +2105,6 @@ enum class verbosity_t : int {
     verbose,
 };
 
-struct stdin_options_t {
-    ghc::filesystem::path so_out;
-    bool so_timestamp{false};
-    auto_fd so_out_fd;
-};
-
 int
 main(int argc, char* argv[])
 {
@@ -2089,19 +2113,17 @@ main(int argc, char* argv[])
     exec_context& ec = lnav_data.ld_exec_context;
     int retval = EXIT_SUCCESS;
 
-    std::shared_ptr<piper_proc> stdin_reader;
-    stdin_options_t stdin_opts;
-    bool exec_stdin = false, load_stdin = false, stdin_captured = false;
+    bool exec_stdin = false, load_stdin = false;
     mode_flags_t mode_flags;
     const char* LANG = getenv("LANG");
-    ghc::filesystem::path stdin_tmp_path;
     verbosity_t verbosity = verbosity_t::standard;
 
     if (LANG == nullptr || strcmp(LANG, "C") == 0) {
-        setenv("LANG", "en_US.utf-8", 1);
+        setenv("LANG", "en_US.UTF-8", 1);
     }
 
     (void) signal(SIGPIPE, SIG_IGN);
+    (void) signal(SIGCHLD, sigchld);
     setlocale(LC_ALL, "");
     try {
         std::locale::global(std::locale(""));
@@ -2256,6 +2278,21 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
                    lnav_data.ld_debug_log_name,
                    "Write debug messages to the given file.")
         ->type_name("FILE");
+    app.add_option("-I", lnav_data.ld_config_paths, "include paths")
+        ->check(CLI::ExistingDirectory)
+        ->check([&arg_errors](std::string inc_path) -> std::string {
+            if (access(inc_path.c_str(), X_OK) != 0) {
+                arg_errors.emplace_back(
+                    lnav::console::user_message::error(
+                        attr_line_t("invalid configuration directory: ")
+                            .append(lnav::roles::file(inc_path)))
+                        .with_errno_reason());
+                return "unreadable";
+            }
+
+            return std::string();
+        })
+        ->allow_extra_args(false);
     app.add_flag("-q{0},-v{2}", verbosity, "Control the verbosity");
     app.set_version_flag("-V,--version");
     app.footer(fmt::format(FMT_STRING("Version: {}"), VCS_PACKAGE_STRING));
@@ -2264,28 +2301,10 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
 
     if (argc < 2 || strcmp(argv[1], "-m") != 0) {
         app.add_flag("-H", lnav_data.ld_show_help_view, "show help");
-        app.add_option("-I", lnav_data.ld_config_paths, "include paths")
-            ->check(CLI::ExistingDirectory)
-            ->check([&arg_errors](std::string inc_path) -> std::string {
-                if (access(inc_path.c_str(), X_OK) != 0) {
-                    arg_errors.emplace_back(
-                        lnav::console::user_message::error(
-                            attr_line_t("invalid configuration directory: ")
-                                .append(lnav::roles::file(inc_path)))
-                            .with_errno_reason());
-                    return "unreadable";
-                }
-
-                return std::string();
-            })
-            ->allow_extra_args(false);
         app.add_flag("-C", mode_flags.mf_check_configs, "check");
         auto* install_flag
             = app.add_flag("-i", mode_flags.mf_install, "install");
         app.add_flag("-u", mode_flags.mf_update_formats, "update");
-        auto* write_flag = app.add_option("-w", stdin_opts.so_out, "write");
-        auto* ts_flag
-            = app.add_flag("-t", stdin_opts.so_timestamp, "timestamp");
         auto* no_default_flag
             = app.add_flag("-N", mode_flags.mf_no_default, "no def");
         auto* rotated_flag = app.add_flag(
@@ -2360,15 +2379,24 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
                                   ->allow_extra_args(false)
                                   ->each(file_appender);
 
+        auto shexec_appender = [&mode_flags](std::string cmd) {
+            mode_flags.mf_no_default = true;
+            lnav_data.ld_commands.emplace_back(
+                fmt::format(FMT_STRING(":sh {}"), cmd));
+        };
+        auto* cmdline_opt = app.add_option("-e")
+                                ->each(shexec_appender)
+                                ->allow_extra_args(false)
+                                ->trigger_on_parse(true);
+
         install_flag->needs(file_opt);
-        install_flag->excludes(write_flag,
-                               ts_flag,
-                               no_default_flag,
+        install_flag->excludes(no_default_flag,
                                rotated_flag,
                                recurse_flag,
                                headless_flag,
                                cmd_opt,
-                               exec_file_opt);
+                               exec_file_opt,
+                               cmdline_opt);
     }
 
     auto is_mmode = argc >= 2 && strcmp(argv[1], "-m") == 0;
@@ -2380,13 +2408,13 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
         }
     } catch (const CLI::CallForHelp& e) {
         if (is_mmode) {
-            fmt::print("{}\n", app.help());
+            fmt::print(FMT_STRING("{}\n"), app.help());
         } else {
             usage();
         }
         return EXIT_SUCCESS;
     } catch (const CLI::CallForVersion& e) {
-        fmt::print("{}\n", VCS_PACKAGE_STRING);
+        fmt::print(FMT_STRING("{}\n"), VCS_PACKAGE_STRING);
         return EXIT_SUCCESS;
     } catch (const CLI::ParseError& e) {
         if (!arg_errors.empty()) {
@@ -2413,7 +2441,9 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
     }
 
     lnav_log_file = make_optional_from_nullable(
-        fopen(lnav_data.ld_debug_log_name.c_str(), "a"));
+        fopen(lnav_data.ld_debug_log_name.c_str(), "ae"));
+    lnav_log_file |
+        [](auto* file) { fcntl(fileno(file), F_SETFD, FD_CLOEXEC); };
     log_info("lnav started");
 
     {
@@ -2428,6 +2458,7 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
     }
 
     load_config(lnav_data.ld_config_paths, config_errors);
+
     if (!config_errors.empty()) {
         if (print_user_msgs(config_errors, mode_flags) != EXIT_SUCCESS) {
             return EXIT_FAILURE;
@@ -2637,6 +2668,7 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
     log_fos->fos_contexts.emplace("", false, true);
     lnav_data.ld_views[LNV_LOG]
         .set_sub_source(&lnav_data.ld_log_source)
+#if 0
         .set_delegate(std::make_shared<action_delegate>(
             lnav_data.ld_log_source,
             [](auto child_pid) { lnav_data.ld_children.push_back(child_pid); },
@@ -2646,17 +2678,34 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
                     pp->get_fd());
                 lnav_data.ld_files_to_front.template emplace_back(desc, 0_vl);
             }))
+#endif
         .add_input_delegate(lnav_data.ld_log_source)
         .set_tail_space(2_vl)
         .set_overlay_source(log_fos);
+    auto sel_reload_delegate = [](textview_curses& tc) {
+        if (!(lnav_data.ld_flags & LNF_HEADLESS)
+            && lnav_config.lc_ui_movement.mode == config_movement_mode::CURSOR)
+        {
+            tc.set_selectable(true);
+        }
+    };
+    lnav_data.ld_views[LNV_LOG].set_reload_config_delegate(sel_reload_delegate);
+    lnav_data.ld_views[LNV_PRETTY].set_reload_config_delegate(
+        sel_reload_delegate);
     lnav_data.ld_views[LNV_TEXT].set_sub_source(&lnav_data.ld_text_source);
-    lnav_data.ld_views[LNV_HISTOGRAM].set_sub_source(
-        &lnav_data.ld_hist_source2);
+    lnav_data.ld_views[LNV_TEXT].set_reload_config_delegate(
+        sel_reload_delegate);
+    lnav_data.ld_views[LNV_HISTOGRAM]
+        .set_reload_config_delegate(sel_reload_delegate)
+        .set_sub_source(&lnav_data.ld_hist_source2);
     lnav_data.ld_views[LNV_DB].set_sub_source(&lnav_data.ld_db_row_source);
     lnav_data.ld_db_overlay.dos_labels = &lnav_data.ld_db_row_source;
-    lnav_data.ld_views[LNV_DB].set_overlay_source(&lnav_data.ld_db_overlay);
+    lnav_data.ld_views[LNV_DB]
+        .set_reload_config_delegate(sel_reload_delegate)
+        .set_overlay_source(&lnav_data.ld_db_overlay);
     lnav_data.ld_spectro_source = std::make_unique<spectrogram_source>();
     lnav_data.ld_views[LNV_SPECTRO]
+        .set_reload_config_delegate(sel_reload_delegate)
         .set_sub_source(lnav_data.ld_spectro_source.get())
         .set_overlay_source(lnav_data.ld_spectro_source.get())
         .add_input_delegate(*lnav_data.ld_spectro_source)
@@ -2758,6 +2807,7 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
     lnav_data.ld_mode = ln_mode_t::PAGING;
 
     if ((isatty(STDIN_FILENO) || is_dev_null(STDIN_FILENO)) && file_args.empty()
+        && lnav_data.ld_active_files.fc_file_names.empty()
         && !mode_flags.mf_no_default)
     {
         char start_dir[FILENAME_MAX];
@@ -2800,7 +2850,6 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
 
         auto colon_index = file_path.rfind(':');
         if (colon_index != std::string::npos) {
-            file_path_without_trailer = file_path.substr(0, colon_index);
             auto top_range = scn::string_view{&file_path[colon_index + 1],
                                               &(*file_path.cend())};
             auto scan_res = scn::scan_value<int>(top_range);
@@ -2831,10 +2880,13 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
         {
             auto ul = std::make_shared<url_loader>(file_path);
 
-            lnav_data.ld_active_files.fc_file_names[file_path].with_fd(
-                ul->copy_fd());
+            lnav_data.ld_active_files.fc_file_names[ul->get_path()]
+                .with_filename(file_path);
             isc::to<curl_looper&, services::curl_streamer_t>().send(
                 [ul](auto& clooper) { clooper.add_request(ul); });
+        } else if (file_path.find("://") != std::string::npos) {
+            lnav_data.ld_commands.emplace_back(
+                fmt::format(FMT_STRING(":open {}"), file_path));
         }
 #endif
         else if (is_glob(file_path))
@@ -2874,25 +2926,15 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
                         .with_errno_reason());
                 retval = EXIT_FAILURE;
             } else {
-                auto fifo_tmp_fd
-                    = lnav::filesystem::open_temp_file(
-                          ghc::filesystem::temp_directory_path()
-                          / "lnav.fifo.XXXXXX")
-                          .map([](auto&& pair) {
-                              ghc::filesystem::remove(pair.first);
-
-                              return std::move(pair.second);
-                          })
-                          .expect("Cannot create temporary file for FIFO");
-                auto fifo_piper = std::make_shared<piper_proc>(
-                    std::move(fifo_fd), false, std::move(fifo_tmp_fd));
-                auto fifo_out_fd = fifo_piper->get_fd();
                 auto desc = fmt::format(FMT_STRING("FIFO [{}]"),
                                         lnav_data.ld_fifo_counter++);
+                auto create_piper_res = lnav::piper::create_looper(
+                    desc, std::move(fifo_fd), auto_fd{});
 
-                lnav_data.ld_active_files.fc_file_names[desc].with_fd(
-                    std::move(fifo_out_fd));
-                lnav_data.ld_pipers.push_back(fifo_piper);
+                if (create_piper_res.isOk()) {
+                    lnav_data.ld_active_files.fc_file_names[desc].with_piper(
+                        create_piper_res.unwrap());
+                }
             }
         } else if ((abspath = realpath(file_path.c_str(), nullptr)) == nullptr)
         {
@@ -2995,44 +3037,62 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
         retval = EXIT_FAILURE;
     }
 
+    nonstd::optional<ghc::filesystem::path> stdin_pattern;
     if (load_stdin && !isatty(STDIN_FILENO) && !is_dev_null(STDIN_FILENO)
         && !exec_stdin)
     {
-        if (stdin_opts.so_out.empty()) {
-            auto pattern
-                = lnav::paths::dotlnav() / "stdin-captures/stdin.XXXXXX";
+        static const std::string STDIN_NAME = "stdin";
+        struct stat stdin_st;
 
-            auto open_result = lnav::filesystem::open_temp_file(pattern);
-            if (open_result.isErr()) {
-                fprintf(stderr,
-                        "Unable to open temporary file for stdin: %s",
-                        open_result.unwrapErr().c_str());
-                return EXIT_FAILURE;
+        if (fstat(STDIN_FILENO, &stdin_st) == -1) {
+            lnav::console::print(
+                stderr,
+                lnav::console::user_message::error("unable to stat() stdin")
+                    .with_errno_reason());
+            retval = EXIT_FAILURE;
+        } else if (S_ISFIFO(stdin_st.st_mode)) {
+            struct pollfd pfd[1];
+
+            pfd[0].fd = STDIN_FILENO;
+            pfd[0].events = POLLIN;
+            pfd[0].revents = 0;
+            auto prc = poll(pfd, 1, 0);
+
+            if (prc == 0 || (pfd[0].revents & POLLIN)) {
+                auto stdin_piper_res = lnav::piper::create_looper(
+                    STDIN_NAME, auto_fd::dup_of(STDIN_FILENO), auto_fd{});
+                if (stdin_piper_res.isOk()) {
+                    auto stdin_piper = stdin_piper_res.unwrap();
+                    stdin_pattern = stdin_piper.get_out_pattern();
+                    lnav_data.ld_active_files
+                        .fc_file_names[stdin_piper.get_name()]
+                        .with_piper(stdin_piper)
+                        .with_include_in_session(false);
+                }
             }
+        } else if (S_ISREG(stdin_st.st_mode)) {
+            // The shell connected a file directly, just open it up and add it
+            // in here.
+            auto loo = logfile_open_options{}
+                           .with_filename(STDIN_NAME)
+                           .with_include_in_session(false);
 
-            auto temp_pair = open_result.unwrap();
-            stdin_tmp_path = temp_pair.first;
-            stdin_opts.so_out_fd = std::move(temp_pair.second);
-        } else {
-            auto open_res = lnav::filesystem::create_file(
-                stdin_opts.so_out, O_RDWR | O_TRUNC, 0600);
+            auto open_res
+                = logfile::open(STDIN_NAME, loo, auto_fd::dup_of(STDIN_FILENO));
+
             if (open_res.isErr()) {
-                fmt::print(stderr, "error: {}\n", open_res.unwrapErr());
-                return EXIT_FAILURE;
+                lnav::console::print(
+                    stderr,
+                    lnav::console::user_message::error("unable to open stdin")
+                        .with_reason(open_res.unwrapErr()));
+                retval = EXIT_FAILURE;
+            } else {
+                file_collection fc;
+
+                fc.fc_files.emplace_back(open_res.unwrap());
+                update_active_files(fc);
             }
-
-            stdin_opts.so_out_fd = open_res.unwrap();
         }
-
-        stdin_captured = true;
-        stdin_reader
-            = std::make_shared<piper_proc>(auto_fd(STDIN_FILENO),
-                                           stdin_opts.so_timestamp,
-                                           std::move(stdin_opts.so_out_fd));
-        lnav_data.ld_active_files.fc_file_names["stdin"]
-            .with_fd(stdin_reader->get_fd())
-            .with_include_in_session(false);
-        lnav_data.ld_pipers.push_back(stdin_reader);
     }
 
     if (!isatty(STDIN_FILENO) && isatty(STDOUT_FILENO)) {
@@ -3041,7 +3101,7 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
         }
     }
 
-    if (retval == EXIT_SUCCESS
+    if (retval == EXIT_SUCCESS && lnav_data.ld_active_files.fc_files.empty()
         && lnav_data.ld_active_files.fc_file_names.empty()
         && lnav_data.ld_commands.empty()
         && !(lnav_data.ld_show_help_view || mode_flags.mf_no_default))
@@ -3076,6 +3136,7 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
 #endif
 #ifdef HAVE_ARCHIVE_H
             log_info("  libarchive=%d", ARCHIVE_VERSION_NUMBER);
+            log_info("    details=%s", archive_version_details());
 #endif
             log_info("  ncurses=%s", NCURSES_VERSION);
             log_info("  pcre2=%s", pcre2_version);
@@ -3110,6 +3171,9 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
 
                 view_colors::init(true);
                 rescan_files(true);
+                wait_for_pipers();
+                rescan_files(true);
+                rebuild_indexes_repeatedly();
                 if (!lnav_data.ld_active_files.fc_name_to_errors.empty()) {
                     for (const auto& pair :
                          lnav_data.ld_active_files.fc_name_to_errors)
@@ -3153,6 +3217,7 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
                 tailer::cleanup_cache();
                 line_buffer::cleanup_cache();
                 wait_for_pipers();
+                rescan_files(true);
                 isc::to<curl_looper&, services::curl_streamer_t>()
                     .send_and_wait(
                         [](auto& clooper) { clooper.process_all(); });
@@ -3169,6 +3234,22 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
                     }
 
                     return EXIT_FAILURE;
+                }
+
+                for (const auto& lf : lnav_data.ld_active_files.fc_files) {
+                    for (const auto& note : lf->get_notes()) {
+                        switch (note.first) {
+                            case logfile::note_type::not_utf: {
+                                auto um = lnav::console::user_message::error(
+                                    note.second);
+                                lnav::console::print(stderr, um);
+                                break;
+                            }
+
+                            default:
+                                break;
+                        }
+                    }
                 }
 
                 for (auto& pair : cmd_results) {
@@ -3271,53 +3352,26 @@ SELECT tbl_name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'
 
         // When reading from stdin, tell the user where the capture file is
         // stored so they can look at it later.
-        if (stdin_captured && stdin_opts.so_out.empty()
-            && !(lnav_data.ld_flags & LNF_HEADLESS))
-        {
-            auto stdin_fd = stdin_reader->get_fd();
-            struct stat stdin_stat;
-            nonstd::optional<file_ssize_t> stdin_size;
-
-            // NB: the file can be deleted by the time we get here
-            fchmod(stdin_fd.get(), S_IRUSR);
-            if (fstat(stdin_fd.get(), &stdin_stat) != -1) {
-                stdin_size = stdin_stat.st_size;
-            }
-            if (!ghc::filesystem::exists(stdin_tmp_path)
-                || verbosity == verbosity_t::quiet || !stdin_size
-                || stdin_size.value() > MAX_STDIN_CAPTURE_SIZE)
+        if (stdin_pattern && !(lnav_data.ld_flags & LNF_HEADLESS)) {
+            file_size_t stdin_size = 0;
+            for (const auto& ent : ghc::filesystem::directory_iterator(
+                     stdin_pattern.value().parent_path()))
             {
-                std::error_code rm_err_code;
-
-                log_info("not saving stdin capture -- %s (size=%d)",
-                         stdin_tmp_path.c_str(),
-                         stdin_size.value_or(-1));
-                ghc::filesystem::remove(stdin_tmp_path, rm_err_code);
-            } else {
-                auto home = getenv_opt("HOME");
-                auto path_str = stdin_tmp_path.string();
-
-                if (home && startswith(path_str, home.value())) {
-                    path_str = path_str.substr(strlen(home.value()));
-                    if (path_str[0] != '/') {
-                        path_str.insert(0, 1, '/');
-                    }
-                    path_str.insert(0, 1, '~');
-                }
-
-                lnav::console::print(
-                    stderr,
-                    lnav::console::user_message::info(
-                        attr_line_t()
-                            .append(lnav::roles::number(humanize::file_size(
-                                stdin_size.value(), humanize::alignment::none)))
-                            .append(" of data from stdin was captured and "
-                                    "will be saved for one day.  You can "
-                                    "reopen it by running:\n")
-                            .appendf(FMT_STRING("   {} "),
-                                     lnav_data.ld_program_name)
-                            .append(lnav::roles::file(path_str))));
+                stdin_size += ent.file_size();
             }
+
+            lnav::console::print(
+                stderr,
+                lnav::console::user_message::info(
+                    attr_line_t()
+                        .append(lnav::roles::number(humanize::file_size(
+                            stdin_size, humanize::alignment::none)))
+                        .append(" of data from stdin was captured and "
+                                "will be saved for one day.  You can "
+                                "reopen it by running:\n")
+                        .appendf(FMT_STRING("   {} "),
+                                 lnav_data.ld_program_name)
+                        .append(lnav::roles::file(stdin_pattern.value()))));
         }
     }
 

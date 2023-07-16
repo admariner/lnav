@@ -42,9 +42,9 @@
 
 #include "fmt/format.h"
 #include "optional.hpp"
+#include "result.h"
 #include "scn/util/string_view.h"
 #include "strnatcmp.h"
-#include "ww898/cp_utf8.hpp"
 
 struct string_fragment {
     using iterator = const char*;
@@ -157,18 +157,16 @@ struct string_fragment {
 
     char front() const { return this->sf_string[this->sf_begin]; }
 
-    uint32_t front_codepoint() const
-    {
-        size_t index = 0;
-        try {
-            return ww898::utf::utf8::read(
-                [this, &index]() { return this->data()[index++]; });
-        } catch (const std::runtime_error& e) {
-            return this->data()[0];
-        }
-    }
+    uint32_t front_codepoint() const;
 
     char back() const { return this->sf_string[this->sf_end - 1]; }
+
+    void pop_back()
+    {
+        if (!this->empty()) {
+            this->sf_end -= 1;
+        }
+    }
 
     iterator begin() const { return &this->sf_string[this->sf_begin]; }
 
@@ -176,27 +174,10 @@ struct string_fragment {
 
     bool empty() const { return !this->is_valid() || length() == 0; }
 
-    Result<ssize_t, const char*> codepoint_to_byte_index(ssize_t cp_index) const
-    {
-        ssize_t retval = 0;
+    Result<ssize_t, const char*> codepoint_to_byte_index(
+        ssize_t cp_index) const;
 
-        while (cp_index > 0) {
-            if (retval >= this->length()) {
-                return Err("index is beyond the end of the string");
-            }
-            auto ch_len = TRY(ww898::utf::utf8::char_size([this, retval]() {
-                return std::make_pair(this->data()[retval],
-                                      this->length() - retval - 1);
-            }));
-
-            retval += ch_len;
-            cp_index -= 1;
-        }
-
-        return Ok(retval);
-    }
-
-    char operator[](int index) const
+    const char& operator[](int index) const
     {
         return this->sf_string[sf_begin + index];
     }
@@ -283,7 +264,8 @@ struct string_fragment {
             this->sf_string, this->sf_begin + begin, this->sf_begin + end};
     }
 
-    size_t count(char ch) const {
+    size_t count(char ch) const
+    {
         size_t retval = 0;
 
         for (int lpc = this->sf_begin; lpc < this->sf_end; lpc++) {
@@ -307,7 +289,9 @@ struct string_fragment {
     }
 
     template<typename P>
-    string_fragment find_left_boundary(size_t start, P&& predicate) const
+    string_fragment find_left_boundary(size_t start,
+                                       P&& predicate,
+                                       size_t count = 1) const
     {
         assert((int) start <= this->length());
 
@@ -316,25 +300,33 @@ struct string_fragment {
         }
         while (start > 0) {
             if (predicate(this->data()[start])) {
-                start += 1;
-                break;
+                count -= 1;
+                if (count == 0) {
+                    start += 1;
+                    break;
+                }
             }
             start -= 1;
         }
 
         return string_fragment{
             this->sf_string,
-            (int) start,
+            this->sf_begin + (int) start,
             this->sf_end,
         };
     }
 
     template<typename P>
-    string_fragment find_right_boundary(size_t start, P&& predicate) const
+    string_fragment find_right_boundary(size_t start,
+                                        P&& predicate,
+                                        size_t count = 1) const
     {
         while ((int) start < this->length()) {
             if (predicate(this->data()[start])) {
-                break;
+                count -= 1;
+                if (count == 0) {
+                    break;
+                }
             }
             start += 1;
         }
@@ -347,10 +339,14 @@ struct string_fragment {
     }
 
     template<typename P>
-    string_fragment find_boundaries_around(size_t start, P&& predicate) const
+    string_fragment find_boundaries_around(size_t start,
+                                           P&& predicate,
+                                           size_t count = 1) const
     {
-        return this->template find_left_boundary(start, predicate)
-            .find_right_boundary(0, predicate);
+        auto left = this->template find_left_boundary(start, predicate, count);
+
+        return left.find_right_boundary(
+            start - left.sf_begin, predicate, count);
     }
 
     nonstd::optional<std::pair<uint32_t, string_fragment>> consume_codepoint()

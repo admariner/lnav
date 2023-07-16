@@ -24,9 +24,7 @@
                         "background-color": "#011627"
                     },
                     "alt-text": {
-                        "color": "#d6deeb",
-                        "background-color": "#011627",
-                        "bold": true
+                        "background-color": "#1c1c1c"
                     },
                     "ok": {
                         "color": "$green",
@@ -43,6 +41,12 @@
                     "hidden": {
                         "color": "$yellow",
                         "bold": true
+                    },
+                    "cursor-line": {
+                        "color": "$cyan",
+                        "background-color": "$red",
+                        "bold": true,
+                        "underline": true
                     },
                     "adjusted-time": {
                         "color": "$magenta"

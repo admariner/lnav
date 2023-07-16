@@ -39,6 +39,26 @@
                     },
                     "additionalProperties": false
                 },
+                "piper": {
+                    "description": "Settings related to capturing piped data",
+                    "title": "/tuning/piper",
+                    "type": "object",
+                    "properties": {
+                        "max-size": {
+                            "title": "/tuning/piper/max-size",
+                            "description": "The maximum size of a capture file",
+                            "type": "integer",
+                            "minimum": 128
+                        },
+                        "rotations": {
+                            "title": "/tuning/piper/rotations",
+                            "description": "The number of rotated files to keep",
+                            "type": "integer",
+                            "minimum": 2
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "file-vtab": {
                     "description": "Settings related to the lnav_file virtual-table",
                     "title": "/tuning/file-vtab",
@@ -179,6 +199,28 @@
                         }
                     },
                     "additionalProperties": false
+                },
+                "url-scheme": {
+                    "description": "Settings related to custom URL handling",
+                    "title": "/tuning/url-scheme",
+                    "type": "object",
+                    "patternProperties": {
+                        "(\\w+)": {
+                            "description": "Definition of a custom URL scheme",
+                            "title": "/tuning/url-scheme/<url_scheme>",
+                            "type": "object",
+                            "properties": {
+                                "handler": {
+                                    "title": "/tuning/url-scheme/<url_scheme>/handler",
+                                    "description": "The name of the lnav script that can handle URLs with of this scheme.  This should not include the '.lnav' suffix.",
+                                    "type": "string",
+                                    "pattern": "^[\\w\\-]+(?!\\.lnav)$"
+                                }
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "additionalProperties": false
                 }
             },
             "additionalProperties": false
@@ -282,6 +324,11 @@
                                         "hidden": {
                                             "description": "Styling for hidden fields in logs",
                                             "title": "/ui/theme-defs/<theme_name>/styles/hidden",
+                                            "$ref": "#/definitions/style"
+                                        },
+                                        "cursor-line": {
+                                            "description": "Styling for the cursor line in the main view",
+                                            "title": "/ui/theme-defs/<theme_name>/styles/cursor-line",
                                             "$ref": "#/definitions/style"
                                         },
                                         "adjusted-time": {
@@ -617,6 +664,27 @@
                                 }
                             },
                             "additionalProperties": false
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "movement": {
+                    "description": "Log file cursor movement mode settings",
+                    "title": "/ui/movement",
+                    "type": "object",
+                    "properties": {
+                        "mode": {
+                            "title": "/ui/movement/mode",
+                            "description": "The mode of cursor movement to use.",
+                            "type": "string",
+                            "enum": [
+                                "top",
+                                "cursor"
+                            ],
+                            "examples": [
+                                "top",
+                                "cursor"
+                            ]
                         }
                     },
                     "additionalProperties": false

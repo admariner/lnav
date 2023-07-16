@@ -36,7 +36,6 @@
 #include <map>
 #include <set>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "archive_manager.cfg.hh"
@@ -49,10 +48,12 @@
 #include "log_level.hh"
 #include "logfile.cfg.hh"
 #include "logfile_sub_source.cfg.hh"
+#include "piper.looper.cfg.hh"
 #include "styling.hh"
 #include "sysclip.cfg.hh"
 #include "tailer/tailer.looper.cfg.hh"
 #include "top_status_source.cfg.hh"
+#include "url_handler.cfg.hh"
 
 /**
  * Check if an experimental feature should be enabled by
@@ -85,13 +86,23 @@ struct key_map {
     std::map<std::string, key_command> km_seq_to_cmd;
 };
 
+enum class config_movement_mode : unsigned int {
+    TOP,
+    CURSOR,
+};
+
+struct movement_config {
+    config_movement_mode mode{config_movement_mode::TOP};
+};
+
 struct _lnav_config {
     top_status_source_cfg lc_top_status_cfg;
     bool lc_ui_dim_text;
     bool lc_ui_default_colors{true};
     std::string lc_ui_keymap;
     std::string lc_ui_theme;
-    std::unordered_map<std::string, key_map> lc_ui_keymaps;
+    movement_config lc_ui_movement;
+    std::map<std::string, key_map> lc_ui_keymaps;
     std::map<std::string, std::string> lc_ui_key_overrides;
     std::map<std::string, std::string> lc_global_vars;
     std::map<std::string, lnav_theme> lc_ui_theme_defs;
@@ -99,10 +110,12 @@ struct _lnav_config {
     key_map lc_active_keymap;
 
     archive_manager::config lc_archive_manager;
+    lnav::piper::config lc_piper;
     file_vtab::config lc_file_vtab;
     lnav::logfile::config lc_logfile;
     tailer::config lc_tailer;
     sysclip::config lc_sysclip;
+    lnav::url_handler::config lc_url_handlers;
     logfile_sub_source_ns::config lc_log_source;
 };
 
@@ -128,6 +141,8 @@ void reset_config(const std::string& path);
 void reload_config(std::vector<lnav::console::user_message>& errors);
 
 std::string save_config();
+
+std::string dump_config();
 
 extern const char* DEFAULT_FORMAT_SCHEMA;
 extern const std::set<std::string> SUPPORTED_FORMAT_SCHEMAS;

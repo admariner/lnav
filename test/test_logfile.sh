@@ -37,17 +37,18 @@ run_cap_test ${lnav_test} -n \
     -c ';SELECT * FROM logline' \
     ${test_dir}/logfile_block.1
 
-run_test ${lnav_test} -d /tmp/lnav.err -n -w logfile_stdin.0.log \
-    -c ':shexec sleep 1 && touch -t 200711030923 logfile_stdin.0.log' <<EOF
-2013-06-06T19:13:20.123  Hi
-EOF
-
-check_output "piping to stdin is not working?" <<EOF
-2013-06-06T19:13:20.123  Hi
-EOF
-
 if test x"${TSHARK_CMD}" != x""; then
   run_test env TZ=UTC ${lnav_test} -n ${test_dir}/dhcp.pcapng
+
+  check_output "pcap file is not recognized" <<EOF
+2004-12-05T19:16:24.317 0.0.0.0 → 255.255.255.255 DHCP 314 DHCP Discover - Transaction ID 0x3d1d
+2004-12-05T19:16:24.317 192.168.0.1 → 192.168.0.10 DHCP 342 DHCP Offer    - Transaction ID 0x3d1d
+2004-12-05T19:16:24.387 0.0.0.0 → 255.255.255.255 DHCP 314 DHCP Request  - Transaction ID 0x3d1e
+2004-12-05T19:16:24.387 192.168.0.1 → 192.168.0.10 DHCP 342 DHCP ACK      - Transaction ID 0x3d1e
+EOF
+
+  # make sure piped binary data is left alone
+  run_test cat ${test_dir}/dhcp.pcapng | env TZ=UTC ${lnav_test} -n
 
   check_output "pcap file is not recognized" <<EOF
 2004-12-05T19:16:24.317 0.0.0.0 → 255.255.255.255 DHCP 314 DHCP Discover - Transaction ID 0x3d1d
@@ -59,7 +60,8 @@ EOF
   run_test ${lnav_test} -n ${test_dir}/dhcp-trunc.pcapng
 
   check_error_output "truncated pcap file is not recognized" <<EOF
-error: unable to open file: {test_dir}/dhcp-trunc.pcapng -- tshark: The file "{test_dir}/dhcp-trunc.pcapng" appears to have been cut short in the middle of a packet.
+✘ error: unable to open file: {test_dir}/dhcp-trunc.pcapng
+ reason: tshark: The file "{test_dir}/dhcp-trunc.pcapng" appears to have been cut short in the middle of a packet.
 EOF
 fi
 
@@ -371,9 +373,9 @@ EOF
 run_test ${lnav_test} -n ${srcdir}/logfile_tcf.1
 
 check_output "timestamps with no dates are not rewritten?" <<EOF
-TCF 2014-04-06 09:59:47.191000: Server-Properties: {"Name":"TCF Protocol Logger","OSName":"Linux 3.2.0-60-generic","UserName":"xavier","AgentID":"1fde3dd1-d4be-4f79-8090-6f8d212f03bf","TransportName":"TCP","Proxy":"","ValueAdd":"1","Port":"1534"}
-TCF 2014-04-06 10:30:11.474000: 0: ---> C 2 RunControl getChildren null <eom>
-TCF 2014-04-06 11:01:11.475000: 0: <--- R 2  ["P1"] <eom>
+TCF 2014-04-06 09:59:47.191234: Server-Properties: {"Name":"TCF Protocol Logger","OSName":"Linux 3.2.0-60-generic","UserName":"xavier","AgentID":"1fde3dd1-d4be-4f79-8090-6f8d212f03bf","TransportName":"TCP","Proxy":"","ValueAdd":"1","Port":"1534"}
+TCF 2014-04-06 10:30:11.474442: 0: ---> C 2 RunControl getChildren null <eom>
+TCF 2014-04-06 11:01:11.475557: 0: <--- R 2  ["P1"] <eom>
 EOF
 
 
@@ -588,15 +590,6 @@ info 0x0
 error 0x0
 EOF
 
-run_test ${lnav_test} -d /tmp/lnav.err -nt -w logfile_stdin.log <<EOF
-Hi
-EOF
-
-check_output "piping to stdin is not working?" <<EOF
-2013-06-06T19:13:20.123  Hi
-2013-06-06T19:13:20.123  ---- END-OF-STDIN ----
-EOF
-
 run_test ${lnav_test} -C ${test_dir}/logfile_bad_access_log.0
 
 sed -ibak -e "s|/.*/logfile_bad_access_log.0|logfile_bad_access_log.0|g" `test_err_filename`
@@ -688,6 +681,8 @@ EOF
 
 export YES_COLOR=1
 
+touch -t 202211030923 ${test_dir}/logfile_ansi.1
+
 run_cap_test ${lnav_test} -n \
     -c ';SELECT log_time, log_body FROM syslog_log' \
     ${test_dir}/logfile_ansi.1
@@ -699,3 +694,7 @@ run_cap_test ${lnav_test} -n \
 run_cap_test ${lnav_test} -n \
     -c ';SELECT basename(filepath),descriptor,mimetype,content FROM lnav_file_metadata' \
     logfile_syslog.1.gz
+
+run_cap_test ${lnav_test} -n \
+    -c ':filter-in Air Mob' \
+    ${test_dir}/logfile_ansi.1

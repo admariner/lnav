@@ -45,6 +45,12 @@ Options
 
    Execute the given command file.  This option can be given multiple times.
 
+.. option:: -e <command-line>
+
+   Execute the given shell command-line and display its output.  This is
+   equivalent to executing the :code:`:sh` command and passing the
+   :option:`-N` flag. This option can be given multiple times.
+
 .. option:: -I <path>
 
    Add a configuration directory.
@@ -76,14 +82,6 @@ Options
 
    Recursively load files from the given base directories.
 
-.. option:: -t
-
-   Prepend timestamps to the lines of data being read in on the standard input.
-
-.. option:: -w <path>
-
-   Write the contents of the standard input to this file.
-
 .. option:: -V
 
    Print the version of lnav.
@@ -92,6 +90,8 @@ Options
 
    Do not print the log messages after executing all of the commands.
 
+
+.. _management_cli:
 
 Management Mode (v0.11.0+)
 --------------------------
@@ -107,8 +107,21 @@ Options
    Switch to management mode.  This must be the first option passed on the
    command-line.
 
+.. option:: -I <path>
+
+   Add a configuration directory.
+
 Subcommands
 ^^^^^^^^^^^
+
+.. option:: config get
+
+   Print out the current configuration as JSON on the standard output.
+
+.. option:: config blame
+
+   Print out the configuration options as JSON-Pointers and the
+   file/line-number where the configuration is sourced from.
 
 .. option:: regex101 import <regex101-url> <format-name> [<regex-name>]
 
@@ -161,8 +174,8 @@ Examples
 
     lnav /var/log
 
-  To watch the output of make with timestamps prepended:
+  To watch the output of make:
 
   .. prompt:: bash
 
-    make 2>&1 | lnav -t
+    lnav -e 'make -j4'

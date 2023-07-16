@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2021, Timothy Stack
+ * Copyright (c) 2023, Timothy Stack
  *
  * All rights reserved.
  *
@@ -25,30 +25,23 @@
  * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * @file pcap_manager.hh
  */
 
-#ifndef lnav_pcap_manager_hh
-#define lnav_pcap_manager_hh
+#ifndef lnav_sql_execute_hh
+#define lnav_sql_execute_hh
 
-#include <string>
 #include <vector>
 
-#include "base/auto_fd.hh"
-#include "base/auto_pid.hh"
-#include "base/result.h"
+#include <sqlite3.h>
 
-namespace pcap_manager {
+#include "base/lnav.console.hh"
+#include "shlex.resolver.hh"
 
-struct convert_result {
-    auto_pid<process_state::running> cr_child;
-    auto_fd cr_destination;
-    std::shared_ptr<std::vector<std::string>> cr_error_queue;
-};
-
-Result<convert_result, std::string> convert(const std::string& filename);
-
-}  // namespace pcap_manager
+void sql_execute_script(
+    sqlite3* db,
+    const std::map<std::string, scoped_value_t>& global_vars,
+    const char* src_name,
+    const char* script,
+    std::vector<lnav::console::user_message>& errors);
 
 #endif

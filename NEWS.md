@@ -1,3 +1,105 @@
+## lnav v0.12.0
+
+Features:
+* Added the `:sh` command and `-e` option to execute a shell
+  command-line and display its output within **lnav**.   The
+  captured output will be displayed in the TEXT view.  The
+  lines from stdout and stderr are recorded separately so
+  that the lines from stderr can be shown in the theme's
+  "error" highlight.  The time that the lines were received
+  are also recorded internally so that the "time-offset"
+  display (enabled by pressing `Shift` + `T`) can be shown
+  and the "jump to slow-down" hotkeys (`s`/`Shift` + `S`)
+  work.  Since the line-by-line timestamps are recorded
+  internally, they will not interfere with timestamps that
+  are in the commands output.
+* Added a `:cd` command to change **lnav**'s current directory.
+* Added support for automatically converting files that are
+  in a format not natively supported by **lnav**.  The new
+  `converter` section in a log format definition allows you
+  to specify how a file type can be detected and converted.
+  The built-in PCAP support in **lnav** is implemented using
+  this mechanism.
+* Added a `shell_exec()` SQLite function that executes a
+  command-line with the user's `$SHELL` and returns the
+  output.
+* Added support for custom URL schemes that are handled by an
+  lnav script.  Schemes can be defined under
+  `/tuning/url-schemes`.  See the main docs for more details.
+* Added a `docker://` URL scheme that can be used to tail
+  the logs for a container (e.g. `docker://my-container`) or
+  files within a container (e.g.
+  `docker://my-serv/var/log/dpkg.log`).
+* Added the SQLite JSON functions to the online help.
+* Added `config get` and `config blame` management CLI
+  commands to get the current configuration and the file
+  locations where the configuration options came from.
+
+Bug Fixes:
+* When piping data into **lnav**'s stdin, the input used to
+  only be written to a single file without any rotation.
+  Now, the input is written to a directory of rotating files.
+  The same is true for the command-lines executed through the
+  new `:sh` command.
+* Binary data piped into stdin should now be treated the same
+  as if it was in a file that was passed on the command-line.
+* The `-I` option is now recognized in the management CLI
+  (i.e. when you run **lnav** with the `-m` flag).
+
+Interface changes:
+* The DB view now uses the "alt-text" theme style to draw
+  alternating rows instead of being hard-coded to bold.  The
+  alternation is also now done in groups of two rows instead
+  of only a single row.  Numbers are also rendered using the
+  "number" theme style as well.
+
+Breaking changes:
+* Removed the `-w` command-line option.  This option was
+  useful when stdin was not automatically preserved.  Since
+  the data is now stored (and cleaned up) as well as being
+  spread across multiple files, this option doesn't make
+  sense anymore.
+* Removed the `-t` command-line flag.  Text data fed in
+  on stdin and captured from a `:sh` execution is
+  automatically timestamped.
+
+## lnav v0.11.2
+
+Features:
+* A "cursor" mode has been added to the main view that can
+  be toggled by pressing CTRL-X.  While in cursor mode, any
+  operations that would normally work on the "top" line will
+  now operate on the focused line instead.
+* Added CTRL-D and CTRL-U hotkeys to move down/up by half
+  a page.
+* Added an `auto-width` flag to the elements of the
+  `line-format` array that indicates that the width of the
+  field should automatically be determined by the observed
+  values.
+* Added bunyan log format from Tobias Gruetzmacher.
+* Added cloudflare log format from @minusf.
+* Number fields used in a JSON log format `line-format`
+  array now default to being right-aligned.  Also, added
+  `prefix` and `suffix` to `line-format` elements so a
+  string can optionally be prepended/appended if the value
+  is not empty.
+* JSON log format detection has been improved to not rely
+  on matching the file name.  All possible formats are
+  tried and the one with the most available fields for a
+  given `line-format` is used.  For example, if the first
+  log message has 8 fields and format A contains 5 of
+  those fields in its `line-format` while format B only
+  contains 2 of those fields in its `line-format`, format
+  A will be used for the file.
+
+Changes:
+* For JSON-lines logs, line-feeds at the end of a value are
+  automatically stripped.
+
+Bug Fixes:
+* Hidden values in JSON logs are now hidden by default.
+* Text with ANSI-escapes is now filtered properly.
+
 ## lnav v0.11.1
 
 Features:

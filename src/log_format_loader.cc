@@ -53,6 +53,7 @@
 #include "fmt/format.h"
 #include "lnav_config.hh"
 #include "log_format_ext.hh"
+#include "sql_execute.hh"
 #include "sql_util.hh"
 #include "yajlpp/yajlpp.hh"
 #include "yajlpp/yajlpp_def.hh"
@@ -281,11 +282,6 @@ read_format_field(yajlpp_parse_context* ypc,
     } else if (field_name == "module-field") {
         elf->elf_module_id_field = intern_string::lookup(value);
         elf->elf_container = true;
-    } else if (field_name == "mime-types") {
-        auto value_opt = ypc->ypc_current_handler->to_enum_value(value);
-        if (value_opt) {
-            elf->elf_mime_types.insert((file_format_t) *value_opt);
-        }
     }
 
     return 1;
@@ -300,6 +296,7 @@ read_levels(yajlpp_parse_context* ypc, const unsigned char* str, size_t len)
     log_level_t level = string2level(level_name_or_number.c_str());
     auto value_frag = string_fragment::from_bytes(str, len);
 
+    elf->elf_level_patterns[level].lp_pcre.pp_path = ypc->get_full_path();
     auto compile_res = lnav::pcre2pp::code::from(value_frag);
     if (compile_res.isErr()) {
         static const intern_string_t PATTERN_SRC
@@ -480,6 +477,11 @@ static const struct json_path_container line_format_handlers = {
         .with_description("The minimum width of the field")
         .for_field(&external_log_format::json_format_element::jfe_min_width),
 
+    yajlpp::property_handler("auto-width")
+        .with_description("Automatically detect the necessary width of the "
+                          "field based on the observed values")
+        .for_field(&external_log_format::json_format_element::jfe_auto_width),
+
     yajlpp::property_handler("max-width")
         .with_min_value(0)
         .with_synopsis("<size>")
@@ -505,6 +507,16 @@ static const struct json_path_container line_format_handlers = {
         .with_enum_values(TRANSFORM_ENUM)
         .for_field(
             &external_log_format::json_format_element::jfe_text_transform),
+
+    yajlpp::property_handler("prefix")
+        .with_synopsis("<str>")
+        .with_description("Text to prepend to the value")
+        .for_field(&external_log_format::json_format_element::jfe_prefix),
+
+    yajlpp::property_handler("suffix")
+        .with_synopsis("<str>")
+        .with_description("Text to append to the value")
+        .for_field(&external_log_format::json_format_element::jfe_suffix),
 };
 
 static const json_path_handler_base::enum_value_t KIND_ENUM[] = {
@@ -529,12 +541,11 @@ static const json_path_handler_base::enum_value_t SCALE_OP_ENUM[] = {
 };
 
 static const struct json_path_container scaling_factor_handlers = {
-    yajlpp::pattern_property_handler("op")
+    yajlpp::property_handler("op")
         .with_enum_values(SCALE_OP_ENUM)
         .for_field(&scaling_factor::sf_op),
 
-    yajlpp::pattern_property_handler("value").for_field(
-        &scaling_factor::sf_value),
+    yajlpp::property_handler("value").for_field(&scaling_factor::sf_value),
 };
 
 static const struct json_path_container scale_handlers = {
@@ -805,13 +816,35 @@ static const struct json_path_container search_table_handlers = {
         .with_children(search_table_def_handlers),
 };
 
-static const json_path_handler_base::enum_value_t MIME_TYPE_ENUM[] = {
-    {
-        "application/vnd.tcpdump.pcap",
-        file_format_t::PCAP,
-    },
+static const struct json_path_container header_expr_handlers = {
+    yajlpp::pattern_property_handler(R"((?<header_expr_name>\w+))")
+        .with_description("SQLite expression")
+        .for_field(&external_log_format::header_exprs::he_exprs),
+};
 
-    json_path_handler_base::ENUM_TERMINATOR,
+static const struct json_path_container header_handlers = {
+    yajlpp::property_handler("expr")
+        .with_description("The expressions used to check if a file header "
+                          "matches this file format")
+        .for_child(&external_log_format::header::h_exprs)
+        .with_children(header_expr_handlers),
+    yajlpp::property_handler("size")
+        .with_description("The minimum size required for this header type")
+        .for_field(&external_log_format::header::h_size),
+};
+
+static const struct json_path_container converter_handlers = {
+    yajlpp::property_handler("type")
+        .with_description("The MIME type")
+        .for_field(&external_log_format::converter::c_type),
+    yajlpp::property_handler("header")
+        .with_description("File header detection definitions")
+        .for_child(&external_log_format::converter::c_header)
+        .with_children(header_handlers),
+    yajlpp::property_handler("command")
+        .with_description("The script used to convert the file")
+        .with_pattern(R"([\w\.\-]+)")
+        .for_field(&external_log_format::converter::c_command),
 };
 
 const struct json_path_container format_handlers = {
@@ -823,14 +856,16 @@ const struct json_path_container format_handlers = {
     json_path_handler("json", read_format_bool)
         .with_description(
             R"(Indicates that log files are JSON-encoded (deprecated, use "file-type": "json"))"),
-    json_path_handler("convert-to-local-time", read_format_bool)
+    json_path_handler("convert-to-local-time")
         .with_description("Indicates that displayed timestamps should "
-                          "automatically be converted to local time"),
-    json_path_handler("hide-extra", read_format_bool)
+                          "automatically be converted to local time")
+        .for_field(&external_log_format::lf_date_time,
+                   &date_time_scanner::dts_local_time),
+    json_path_handler("hide-extra")
         .with_description(
             "Specifies whether extra values in JSON logs should be displayed")
         .for_field(&external_log_format::jlf_hide_extra),
-    json_path_handler("multiline", read_format_bool)
+    json_path_handler("multiline")
         .with_description("Indicates that log messages can span multiple lines")
         .for_field(&log_format::lf_multiline),
     json_path_handler("timestamp-divisor", read_format_double)
@@ -842,9 +877,11 @@ const struct json_path_container format_handlers = {
         .with_description("A regular expression that restricts this format to "
                           "log files with a matching name")
         .for_field(&external_log_format::elf_filename_pcre),
-    json_path_handler("mime-types#", read_format_field)
-        .with_description("A list of mime-types this format should be used for")
-        .with_enum_values(MIME_TYPE_ENUM),
+    json_path_handler("converter")
+        .with_description("Describes how the file format can be detected and "
+                          "converted to a log that can be understood by lnav")
+        .for_child(&external_log_format::elf_converter)
+        .with_children(converter_handlers),
     json_path_handler("level-field")
         .with_description(
             "The name of the level field in the log message pattern")
@@ -1432,22 +1469,25 @@ static void
 find_format_in_path(const ghc::filesystem::path& path,
                     available_scripts& scripts)
 {
-    auto format_path = path / "formats/*/*.lnav";
-    static_root_mem<glob_t, globfree> gl;
+    for (auto format_path :
+         {path / "formats/*/*.lnav", path / "configs/*/*.lnav"})
+    {
+        static_root_mem<glob_t, globfree> gl;
 
-    log_debug("Searching for script in path: %s", format_path.c_str());
-    if (glob(format_path.c_str(), 0, nullptr, gl.inout()) == 0) {
-        for (int lpc = 0; lpc < (int) gl->gl_pathc; lpc++) {
-            const char* filename = basename(gl->gl_pathv[lpc]);
-            auto script_name = std::string(filename, strlen(filename) - 5);
-            struct script_metadata meta;
+        log_debug("Searching for script in path: %s", format_path.c_str());
+        if (glob(format_path.c_str(), 0, nullptr, gl.inout()) == 0) {
+            for (int lpc = 0; lpc < (int) gl->gl_pathc; lpc++) {
+                const char* filename = basename(gl->gl_pathv[lpc]);
+                auto script_name = std::string(filename, strlen(filename) - 5);
+                struct script_metadata meta;
 
-            meta.sm_path = gl->gl_pathv[lpc];
-            meta.sm_name = script_name;
-            extract_metadata_from_file(meta);
-            scripts.as_scripts[script_name].push_back(meta);
+                meta.sm_path = gl->gl_pathv[lpc];
+                meta.sm_name = script_name;
+                extract_metadata_from_file(meta);
+                scripts.as_scripts[script_name].push_back(meta);
 
-            log_debug("  found script: %s", meta.sm_path.c_str());
+                log_debug("  found script: %s", meta.sm_path.c_str());
+            }
         }
     }
 }

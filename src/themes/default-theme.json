@@ -16,8 +16,7 @@
                         "color": "semantic()"
                     },
                     "alt-text": {
-                        "color": "Silver",
-                        "bold": true
+                        "background-color": "#262626"
                     },
                     "ok": {
                         "color": "Green",
@@ -34,6 +33,12 @@
                     "hidden": {
                         "color": "Yellow",
                         "bold": true
+                    },
+                    "cursor-line": {
+                        "color": "Cyan1",
+                        "background-color": "Red",
+                        "bold": true,
+                        "underline": true
                     },
                     "adjusted-time": {
                         "color": "Maroon"

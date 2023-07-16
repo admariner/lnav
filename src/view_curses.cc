@@ -46,6 +46,20 @@
 #include "shlex.hh"
 #include "view_curses.hh"
 
+#if defined HAVE_NCURSESW_CURSES_H
+#    include <ncursesw/term.h>
+#elif defined HAVE_NCURSESW_H
+#    include <term.h>
+#elif defined HAVE_NCURSES_CURSES_H
+#    include <ncurses/term.h>
+#elif defined HAVE_NCURSES_H
+#    include <term.h>
+#elif defined HAVE_CURSES_H
+#    include <term.h>
+#else
+#    error "SysV or X/Open-compatible Curses header file required"
+#endif
+
 using namespace std::chrono_literals;
 
 const struct itimerval ui_periodic_timer::INTERVAL = {
@@ -487,7 +501,7 @@ public:
     void reload_config(error_reporter& reporter) override
     {
         if (!view_colors::initialized) {
-            return;
+            view_colors::vc_active_palette = ansi_colors();
         }
 
         auto& vc = view_colors::singleton();
@@ -542,9 +556,8 @@ view_colors::init(bool headless)
     initialized = true;
 
     {
-        auto reporter = [](const void*, const lnav::console::user_message&) {
-
-        };
+        auto reporter
+            = [](const void*, const lnav::console::user_message& um) {};
 
         _COLOR_LISTENER.reload_config(reporter);
     }
@@ -606,8 +619,12 @@ view_colors::to_attrs(const lnav_theme& lt,
 
     fg1 = sc.sc_color;
     bg1 = sc.sc_background_color;
-    shlex(fg1).eval(fg_color, lt.lt_vars);
-    shlex(bg1).eval(bg_color, lt.lt_vars);
+    std::map<std::string, scoped_value_t> vars;
+    for (const auto& vpair : lt.lt_vars) {
+        vars[vpair.first] = vpair.second;
+    }
+    shlex(fg1).eval(fg_color, scoped_resolver{&vars});
+    shlex(bg1).eval(bg_color, scoped_resolver{&vars});
 
     auto fg = styling::color_unit::from_str(fg_color).unwrapOrElse(
         [&](const auto& msg) {
@@ -732,6 +749,8 @@ view_colors::init_roles(const lnav_theme& lt,
         = this->to_attrs(lt, lt.lt_style_alt_text, reporter);
     this->vc_role_attrs[lnav::enums::to_underlying(role_t::VCR_HIDDEN)]
         = this->to_attrs(lt, lt.lt_style_hidden, reporter);
+    this->vc_role_attrs[lnav::enums::to_underlying(role_t::VCR_CURSOR_LINE)]
+        = this->to_attrs(lt, lt.lt_style_cursor_line, reporter);
     this->vc_role_attrs[lnav::enums::to_underlying(role_t::VCR_ADJUSTED_TIME)]
         = this->to_attrs(lt, lt.lt_style_adjusted_time, reporter);
     this->vc_role_attrs[lnav::enums::to_underlying(role_t::VCR_SKEWED_TIME)]
@@ -1203,8 +1222,6 @@ lab_color::operator!=(const lab_color& rhs) const
 {
     return !(rhs == *this);
 }
-
-#include <term.h>
 
 Result<screen_curses, std::string>
 screen_curses::create()

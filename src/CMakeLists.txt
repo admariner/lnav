@@ -190,7 +190,9 @@ add_custom_command(
 list(APPEND GEN_SRCS default-config.h default-config.cc)
 
 set(BUILTIN_LNAV_SCRIPTS
-        scripts/dhclient-summary.lnav scripts/lnav-pop-view.lnav
+        scripts/dhclient-summary.lnav
+        scripts/docker-url-handler.lnav
+        scripts/lnav-pop-view.lnav
         scripts/partition-by-boot.lnav scripts/rename-stdin.lnav
         scripts/search-for.lnav)
 
@@ -204,8 +206,7 @@ add_custom_command(
         DEPENDS bin2c ${BUILTIN_LNAV_SCRIPTS})
 list(APPEND GEN_SRCS builtin-scripts.h builtin-scripts.cc)
 
-set(BUILTIN_SH_SCRIPTS scripts/dhclient-summary.lnav scripts/lnav-pop-view.lnav
-        scripts/partition-by-boot.lnav scripts/search-for.lnav)
+set(BUILTIN_SH_SCRIPTS scripts/dump-pid.sh scripts/pcap_log-converter.sh)
 
 set(BUILTIN_SH_SCRIPT_PATHS ${BUILTIN_SH_SCRIPTS})
 
@@ -351,6 +352,7 @@ add_library(
         extension-functions.cc
         field_overlay_source.cc
         file_collection.cc
+        file_converter_manager.cc
         file_format.cc
         file_vtab.cc
         files_sub_source.cc
@@ -391,7 +393,7 @@ add_library(
         data_scanner.cc
         data_scanner_re.cc
         data_parser.cc
-        pcap_manager.cc
+        file_converter_manager.cc
         plain_text_source.cc
         pretty_printer.cc
         pugixml/pugixml.cpp
@@ -412,7 +414,7 @@ add_library(
         statusview_curses.cc
         string-extension-functions.cc
         sysclip.cc
-        piper_proc.cc
+        piper.looper.cc
         spectro_impls.cc
         spectro_source.cc
         sql_commands.cc
@@ -462,6 +464,7 @@ add_library(
         elem_to_json.hh
         field_overlay_source.hh
         file_collection.hh
+        file_converter_manager.hh
         file_format.hh
         files_sub_source.hh
         filter_observer.hh
@@ -470,6 +473,7 @@ add_library(
         fstat_vtab.hh
         fts_fuzzy_match.hh
         grep_highlighter.hh
+        hasher.hh
         help_text.hh
         help_text_formatter.hh
         highlighter.hh
@@ -502,7 +506,9 @@ add_library(
         md2attr_line.hh
         md4cpp.hh
         optional.hpp
-        pcap_manager.hh
+        file_converter_manager.hh
+        piper.looper.hh
+        piper.looper.cfg.hh
         plain_text_source.hh
         pretty_printer.hh
         preview_status_source.hh
@@ -529,6 +535,7 @@ add_library(
         spectro_impls.hh
         spectro_source.hh
         sqlitepp.hh
+        sql_execute.hh
         sql_help.hh
         sql_util.hh
         static_file_vtab.hh
@@ -546,6 +553,7 @@ add_library(
         time_T.hh
         timer.hh
         top_status_source.hh
+        url_handler.cfg.hh
         url_loader.hh
         view_helpers.hh
         view_helpers.crumbs.hh

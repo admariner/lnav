@@ -206,7 +206,6 @@ handle_paging_key(int ch)
 
     textview_curses* tc = *lnav_data.ld_view_stack.top();
     exec_context& ec = lnav_data.ld_exec_context;
-    logfile_sub_source* lss = nullptr;
     text_sub_source* tc_tss = tc->get_sub_source();
     bookmarks<vis_line_t>::type& bm = tc->get_bookmarks();
 
@@ -219,7 +218,8 @@ handle_paging_key(int ch)
         return true;
     }
 
-    lss = dynamic_cast<logfile_sub_source*>(tc->get_sub_source());
+    auto lss = dynamic_cast<logfile_sub_source*>(tc->get_sub_source());
+    auto text_accel_p = dynamic_cast<text_accel_source*>(tc->get_sub_source());
 
     /* process the command keystroke */
     switch (ch) {
@@ -251,7 +251,7 @@ handle_paging_key(int ch)
 
                 lnav_data.ld_last_view = nullptr;
                 if (src_view != nullptr && dst_view != nullptr) {
-                    src_view->time_for_row(top_tc->get_top()) |
+                    src_view->time_for_row(top_tc->get_selection()) |
                         [dst_view, tc](auto top_time) {
                             dst_view->row_for_time(top_time) |
                                 [tc](auto row) { tc->set_selection(row); };
@@ -323,8 +323,8 @@ handle_paging_key(int ch)
 
         case 'f':
             if (tc == &lnav_data.ld_views[LNV_LOG]) {
-                bm[&logfile_sub_source::BM_FILES].next(tc->get_top()) |
-                    [&tc](auto vl) { tc->set_top(vl); };
+                bm[&logfile_sub_source::BM_FILES].next(tc->get_selection()) |
+                    [&tc](auto vl) { tc->set_selection(vl); };
             } else if (tc == &lnav_data.ld_views[LNV_TEXT]) {
                 textfile_sub_source& tss = lnav_data.ld_text_source;
 
@@ -337,8 +337,13 @@ handle_paging_key(int ch)
 
         case 'F':
             if (tc == &lnav_data.ld_views[LNV_LOG]) {
-                bm[&logfile_sub_source::BM_FILES].prev(tc->get_top()) |
-                    [&tc](auto vl) { tc->set_top(vl); };
+                bm[&logfile_sub_source::BM_FILES].prev(tc->get_selection()) |
+                    [&tc](auto vl) {
+                        // setting the selection for movement to previous file
+                        // marker instead of the top will move the cursor, too,
+                        // if needed.
+                        tc->set_selection(vl);
+                    };
             } else if (tc == &lnav_data.ld_views[LNV_TEXT]) {
                 textfile_sub_source& tss = lnav_data.ld_text_source;
 
@@ -377,15 +382,15 @@ handle_paging_key(int ch)
                 || !tc->is_line_visible(
                     vis_line_t(lnav_data.ld_last_user_mark[tc])))
             {
-                lnav_data.ld_select_start[tc] = tc->get_top();
-                lnav_data.ld_last_user_mark[tc] = tc->get_top();
+                lnav_data.ld_select_start[tc] = tc->get_selection();
+                lnav_data.ld_last_user_mark[tc] = tc->get_selection();
             } else {
                 vis_line_t height;
                 unsigned long width;
 
                 tc->get_dimensions(height, width);
                 if (lnav_data.ld_last_user_mark[tc] > (tc->get_bottom() - 2)
-                    && tc->get_top() + height < tc->get_inner_height())
+                    && tc->get_selection() + height < tc->get_inner_height())
                 {
                     tc->shift_top(1_vl);
                 }
@@ -398,6 +403,11 @@ handle_paging_key(int ch)
             }
             tc->toggle_user_mark(&textview_curses::BM_USER,
                                  vis_line_t(lnav_data.ld_last_user_mark[tc]));
+            if (tc->is_selectable()
+                && tc->get_selection() + 1_vl < tc->get_inner_height())
+            {
+                tc->set_selection(tc->get_selection() + 1_vl);
+            }
             tc->reload_data();
 
             lnav_data.ld_rl_view->set_alt_value(
@@ -412,14 +422,14 @@ handle_paging_key(int ch)
                 || !tc->is_line_visible(
                     vis_line_t(lnav_data.ld_last_user_mark[tc])))
             {
-                new_mark = tc->get_top();
+                new_mark = tc->get_selection();
             } else {
                 new_mark = lnav_data.ld_last_user_mark[tc];
             }
 
             tc->toggle_user_mark(&textview_curses::BM_USER,
                                  vis_line_t(new_mark));
-            if (new_mark == tc->get_top()) {
+            if (new_mark == tc->get_selection() && tc->get_top() > 0_vl) {
                 tc->shift_top(-1_vl);
             }
             if (new_mark > 0) {
@@ -428,12 +438,16 @@ handle_paging_key(int ch)
                 lnav_data.ld_last_user_mark[tc] = new_mark;
                 alerter::singleton().chime("no more lines to mark");
             }
-            lnav_data.ld_select_start[tc] = tc->get_top();
+            lnav_data.ld_select_start[tc] = tc->get_selection();
+            if (tc->is_selectable() && tc->get_selection() > 0_vl) {
+                tc->set_selection(tc->get_selection() - 1_vl);
+            }
             tc->reload_data();
 
             lnav_data.ld_rl_view->set_alt_value(
                 HELP_MSG_1(c, "to copy marked lines to the clipboard"));
-        } break;
+            break;
+        }
 
         case 'M':
             if (lnav_data.ld_last_user_mark.find(tc)
@@ -441,9 +455,9 @@ handle_paging_key(int ch)
             {
                 alerter::singleton().chime("no lines have been marked");
             } else {
-                int start_line = std::min((int) tc->get_top(),
+                int start_line = std::min((int) tc->get_selection(),
                                           lnav_data.ld_last_user_mark[tc] + 1);
-                int end_line = std::max((int) tc->get_top(),
+                int end_line = std::max((int) tc->get_selection(),
                                         lnav_data.ld_last_user_mark[tc] - 1);
 
                 tc->toggle_user_mark(&textview_curses::BM_USER,
@@ -471,21 +485,29 @@ handle_paging_key(int ch)
 #endif
 
         case 's':
-            if (lss) {
-                vis_line_t next_top = vis_line_t(tc->get_top() + 2);
+            if (text_accel_p && text_accel_p->is_time_offset_supported()) {
+                auto next_top = tc->get_selection() + 1_vl;
 
-                if (!lss->is_time_offset_enabled()) {
+                if (!tc->is_selectable()) {
+                    next_top += 1_vl;
+                }
+
+                if (!text_accel_p->is_time_offset_enabled()) {
                     lnav_data.ld_rl_view->set_alt_value(
                         HELP_MSG_1(T, "to disable elapsed-time mode"));
                 }
-                lss->set_time_offset(true);
+                text_accel_p->set_time_offset(true);
                 while (next_top < tc->get_inner_height()) {
-                    if (!lss->find_line(lss->at(next_top))->is_message()) {
-                    } else if (lss->get_line_accel_direction(next_top)
+                    if (!text_accel_p->text_accel_get_line(next_top)
+                             ->is_message())
+                    {
+                    } else if (text_accel_p->get_line_accel_direction(next_top)
                                == log_accel::A_DECEL)
                     {
-                        --next_top;
-                        tc->set_top(next_top);
+                        if (!tc->is_selectable()) {
+                            --next_top;
+                        }
+                        tc->set_selection(next_top);
                         break;
                     }
 
@@ -495,21 +517,28 @@ handle_paging_key(int ch)
             break;
 
         case 'S':
-            if (lss) {
-                vis_line_t next_top = tc->get_top();
+            if (text_accel_p && text_accel_p->is_time_offset_supported()) {
+                auto next_top = tc->get_selection();
 
-                if (!lss->is_time_offset_enabled()) {
+                if (tc->is_selectable() && next_top > 0_vl) {
+                    next_top -= 1_vl;
+                }
+                if (!text_accel_p->is_time_offset_enabled()) {
                     lnav_data.ld_rl_view->set_alt_value(
                         HELP_MSG_1(T, "to disable elapsed-time mode"));
                 }
-                lss->set_time_offset(true);
+                text_accel_p->set_time_offset(true);
                 while (0 <= next_top && next_top < tc->get_inner_height()) {
-                    if (!lss->find_line(lss->at(next_top))->is_message()) {
-                    } else if (lss->get_line_accel_direction(next_top)
+                    if (!text_accel_p->text_accel_get_line(next_top)
+                             ->is_message())
+                    {
+                    } else if (text_accel_p->get_line_accel_direction(next_top)
                                == log_accel::A_DECEL)
                     {
-                        --next_top;
-                        tc->set_top(next_top);
+                        if (!tc->is_selectable()) {
+                            --next_top;
+                        }
+                        tc->set_selection(next_top);
                         break;
                     }
 
@@ -537,33 +566,36 @@ handle_paging_key(int ch)
         case '0':
             if (lss) {
                 const int step = 24 * 60 * 60;
-                lss->time_for_row(tc->get_top()) | [lss, tc](auto first_time) {
-                    lss->find_from_time(roundup_size(first_time.tv_sec, step)) |
-                        [tc](auto line) { tc->set_top(line); };
-                };
+                lss->time_for_row(tc->get_selection()) |
+                    [lss, tc](auto first_time) {
+                        lss->find_from_time(
+                            roundup_size(first_time.tv_sec, step))
+                            | [tc](auto line) { tc->set_selection(line); };
+                    };
             }
             break;
 
         case ')':
             if (lss) {
-                lss->time_for_row(tc->get_top()) | [lss, tc](auto first_time) {
-                    time_t day = rounddown(first_time.tv_sec, 24 * 60 * 60);
-                    lss->find_from_time(day) | [tc](auto line) {
-                        if (line != 0_vl) {
-                            --line;
-                        }
-                        tc->set_top(line);
+                lss->time_for_row(tc->get_selection()) |
+                    [lss, tc](auto first_time) {
+                        time_t day = rounddown(first_time.tv_sec, 24 * 60 * 60);
+                        lss->find_from_time(day) | [tc](auto line) {
+                            if (line != 0_vl) {
+                                --line;
+                            }
+                            tc->set_selection(line);
+                        };
                     };
-                };
             }
             break;
 
         case 'D':
-            if (tc->get_top() == 0) {
+            if (tc->get_selection() == 0) {
                 alerter::singleton().chime(
                     "the top of the log has been reached");
             } else if (lss) {
-                lss->time_for_row(tc->get_top()) |
+                lss->time_for_row(tc->get_selection()) |
                     [lss, ch, tc](auto first_time) {
                         int step = ch == 'D' ? (24 * 60 * 60) : (60 * 60);
                         time_t top_time = first_time.tv_sec;
@@ -571,7 +603,7 @@ handle_paging_key(int ch)
                             if (line != 0_vl) {
                                 --line;
                             }
-                            tc->set_top(line);
+                            tc->set_selection(line);
                         };
                     };
 
@@ -581,11 +613,11 @@ handle_paging_key(int ch)
 
         case 'd':
             if (lss) {
-                lss->time_for_row(tc->get_top()) |
+                lss->time_for_row(tc->get_selection()) |
                     [ch, lss, tc](auto first_time) {
                         int step = ch == 'd' ? (24 * 60 * 60) : (60 * 60);
                         lss->find_from_time(first_time.tv_sec + step) |
-                            [tc](auto line) { tc->set_top(line); };
+                            [tc](auto line) { tc->set_selection(line); };
                     };
 
                 lnav_data.ld_rl_view->set_alt_value(HELP_MSG_1(/, "to search"));
@@ -597,7 +629,7 @@ handle_paging_key(int ch)
             if (lss != nullptr) {
                 logline_helper start_helper(*lss);
 
-                start_helper.lh_current_line = tc->get_top();
+                start_helper.lh_current_line = tc->get_selection();
                 auto& start_line = start_helper.move_to_msg_start();
                 start_helper.annotate();
 
@@ -658,7 +690,7 @@ handle_paging_key(int ch)
                     }
                     if (found) {
                         lnav_data.ld_rl_view->set_value("");
-                        tc->set_top(next_helper.lh_current_line);
+                        tc->set_selection(next_helper.lh_current_line);
                     } else {
                         const auto opid_str
                             = start_helper.to_string(opid_range);
@@ -680,14 +712,16 @@ handle_paging_key(int ch)
             if (tc == &lnav_data.ld_views[LNV_LOG]) {
                 auto* fos = dynamic_cast<field_overlay_source*>(
                     tc->get_overlay_source());
-                fos->fos_contexts.top().c_show
-                    = !fos->fos_contexts.top().c_show;
+                auto& top_context = fos->fos_contexts.top();
+                top_context.c_show = !top_context.c_show;
+                tc->set_sync_selection_and_top(top_context.c_show);
                 tc->set_needs_update();
             } else if (tc == &lnav_data.ld_views[LNV_DB]) {
                 auto* dos = dynamic_cast<db_overlay_source*>(
                     tc->get_overlay_source());
 
                 dos->dos_active = !dos->dos_active;
+                tc->set_sync_selection_and_top(dos->dos_active);
                 tc->set_needs_update();
             }
             break;
@@ -705,12 +739,16 @@ handle_paging_key(int ch)
             break;
 
         case 'T':
-            lnav_data.ld_log_source.toggle_time_offset();
-            if (lss && lss->is_time_offset_enabled()) {
-                lnav_data.ld_rl_view->set_alt_value(HELP_MSG_2(
-                    s, S, "to move forward/backward through slow downs"));
+            if (text_accel_p != nullptr
+                && text_accel_p->is_time_offset_supported())
+            {
+                text_accel_p->toggle_time_offset();
+                if (text_accel_p->is_time_offset_enabled()) {
+                    lnav_data.ld_rl_view->set_alt_value(HELP_MSG_2(
+                        s, S, "to move forward/backward through slow downs"));
+                }
+                tc->reload_data();
             }
-            tc->reload_data();
             break;
 
         case 'I': {
@@ -721,12 +759,14 @@ handle_paging_key(int ch)
                     = dynamic_cast<text_time_translator*>(tc->get_sub_source());
 
                 if (src_view != nullptr) {
-                    src_view->time_for_row(tc->get_top()) | [](auto log_top) {
-                        lnav_data.ld_hist_source2.row_for_time(log_top) |
-                            [](auto row) {
-                                lnav_data.ld_views[LNV_HISTOGRAM].set_top(row);
-                            };
-                    };
+                    src_view->time_for_row(tc->get_selection()) |
+                        [](auto log_top) {
+                            lnav_data.ld_hist_source2.row_for_time(log_top) |
+                                [](auto row) {
+                                    lnav_data.ld_views[LNV_HISTOGRAM]
+                                        .set_selection(row);
+                                };
+                        };
                 }
             } else {
                 lnav_data.ld_view_stack.top() | [&](auto top_tc) {
@@ -736,23 +776,24 @@ handle_paging_key(int ch)
                     if (dst_view != nullptr) {
                         auto& hs = lnav_data.ld_hist_source2;
                         auto hist_top_time_opt
-                            = hs.time_for_row(hist_tc.get_top());
+                            = hs.time_for_row(hist_tc.get_selection());
                         auto curr_top_time_opt
-                            = dst_view->time_for_row(top_tc->get_top());
+                            = dst_view->time_for_row(top_tc->get_selection());
                         if (hist_top_time_opt && curr_top_time_opt
                             && hs.row_for_time(hist_top_time_opt.value())
                                 != hs.row_for_time(curr_top_time_opt.value()))
                         {
                             dst_view->row_for_time(hist_top_time_opt.value()) |
                                 [top_tc](auto new_top) {
-                                    top_tc->set_top(new_top);
+                                    top_tc->set_selection(new_top);
                                     top_tc->set_needs_update();
                                 };
                         }
                     }
                 };
             }
-        } break;
+            break;
+        }
 
         case 'V': {
             textview_curses* db_tc = &lnav_data.ld_views[LNV_DB];
@@ -767,7 +808,7 @@ handle_paging_key(int ch)
 
                 if (log_line_index) {
                     fmt::memory_buffer linestr;
-                    int line_number = (int) tc->get_top();
+                    int line_number = (int) tc->get_selection();
                     unsigned int row;
 
                     fmt::format_to(std::back_inserter(linestr),
@@ -781,14 +822,14 @@ handle_paging_key(int ch)
                         {
                             vis_line_t db_line(row);
 
-                            db_tc->set_top(db_line);
+                            db_tc->set_selection(db_line);
                             db_tc->set_needs_update();
                             break;
                         }
                     }
                 }
             } else if (db_tc->get_inner_height() > 0) {
-                int db_row = db_tc->get_top();
+                int db_row = db_tc->get_selection();
                 tc = &lnav_data.ld_views[LNV_LOG];
                 auto log_line_index = dls.column_name_to_index("log_line");
 
@@ -804,7 +845,7 @@ handle_paging_key(int ch)
                                &line_number)
                         && line_number < tc->listview_rows(*tc))
                     {
-                        tc->set_top(vis_line_t(line_number));
+                        tc->set_selection(vis_line_t(line_number));
                         tc->set_needs_update();
                     }
                 } else {
@@ -820,7 +861,7 @@ handle_paging_key(int ch)
                         {
                             lnav_data.ld_log_source.find_from_time(tv) |
                                 [tc](auto vl) {
-                                    tc->set_top(vl);
+                                    tc->set_selection(vl);
                                     tc->set_needs_update();
                                 };
                             break;
@@ -907,7 +948,7 @@ handle_paging_key(int ch)
                         "Use the 'goto' command to set the relative time to "
                         "move by");
                 } else {
-                    vis_line_t vl = tc->get_top(), new_vl;
+                    vis_line_t vl = tc->get_selection(), new_vl;
                     relative_time rt = last_time;
                     content_line_t cl;
                     struct exttm tm;
@@ -959,6 +1000,7 @@ handle_paging_key(int ch)
             break;
 
         default:
+            log_debug("key sequence %x", ch);
             return false;
     }
     return true;

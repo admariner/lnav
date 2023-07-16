@@ -24,10 +24,18 @@ The majority of these hotkeys should be available in all views.
      - :kbd:`PgDn`
      -
      - Down a page
+   * - :kbd:`Ctrl` + :kbd:`d`
+     -
+     -
+     - Down by half a page
    * - :kbd:`b`
      - :kbd:`Backspace`
      - :kbd:`PgUp`
      - Up a page
+   * - :kbd:`Ctrl` + :kbd:`u`
+     -
+     -
+     - Up by half a page
    * - :kbd:`j`
      - :kbd:`↓`
      -
@@ -40,7 +48,7 @@ The majority of these hotkeys should be available in all views.
      - :kbd:`←`
      -
      - Left half a page.  In the log view, pressing left while at the start of
-       the message text will reveal the source file name for each line.
+       the message text will reveal the shortened source file name for each line.
        Pressing again will reveal the full path.
    * - :kbd:`Shift` + :kbd:`h`
      - :kbd:`Shift` + :kbd:`←`
@@ -179,7 +187,7 @@ Bookmarks
    * - Keypress
      - Command
    * - :kbd:`m`
-     - Mark/unmark the top line
+     - Mark/unmark the top line or focused line when in cursor mode
    * - :kbd:`Shift` + :kbd:`m`
      - Mark/unmark the range of lines from the last marked to the top
    * - :kbd:`Shift` + :kbd:`j`
@@ -215,7 +223,9 @@ Display
    * - :kbd:`Shift` + :kbd:`p`
      - Switch to/from the pretty-printed view of the displayed log or text files
    * - :kbd:`Shift` + :kbd:`t`
-     - Display elapsed time between lines
+     - Display the elapsed time from a bookmark to a given line.  In the TEXT view,
+       this only works for content that was captured from stdin or a :code:`:sh`
+       command.
    * - :kbd:`t`
      - Switch to/from the text file view
    * - :kbd:`i`
@@ -246,6 +256,9 @@ Display
    * - :kbd:`x`
      - Toggle the hiding of log message fields. The hidden fields will be
        replaced with three bullets and highlighted in yellow.
+   * - :kbd:`Ctrl` + :kbd:`x`
+     - Toggle the cursor mode. Allows moving the focused line instead of
+       keeping it fixed at the top of the current screen.
    * - :kbd:`=`
      - Pause/unpause loading of new file data.
 

@@ -36,7 +36,6 @@
 #include "sql_util.hh"
 
 #include <ctype.h>
-#include <stdio.h>
 #include <string.h>
 
 #include "base/auto_mem.hh"
@@ -50,7 +49,7 @@
 #include "pcrepp/pcre2pp.hh"
 #include "readline_context.hh"
 #include "readline_highlighters.hh"
-#include "shlex.resolver.hh"
+#include "sql_execute.hh"
 #include "sql_help.hh"
 #include "sqlite-extension-func.hh"
 
@@ -463,14 +462,15 @@ schema_foreign_key_list(void* ptr, int ncols, char** colvalues, char** colnames)
 void
 dump_sqlite_schema(sqlite3* db, std::string& schema_out)
 {
-    struct sqlite_metadata_callbacks schema_sql_meta_callbacks
-        = {schema_collation_list,
-           schema_db_list,
-           schema_table_list,
-           schema_table_info,
-           schema_foreign_key_list,
-           &schema_out,
-           {}};
+    struct sqlite_metadata_callbacks schema_sql_meta_callbacks = {
+        schema_collation_list,
+        schema_db_list,
+        schema_table_list,
+        schema_table_info,
+        schema_foreign_key_list,
+        &schema_out,
+        {},
+    };
 
     walk_sqlite_metadata(db, schema_sql_meta_callbacks);
 }
@@ -675,7 +675,7 @@ annotate_sql_with_error(sqlite3* db, const char* sql, const char* tail)
 
     if (erroff != -1) {
         auto line_with_error
-            = string_fragment(retval.get_string())
+            = string_fragment::from_str(retval.get_string())
                   .find_boundaries_around(erroff, string_fragment::tag1{'\n'});
         auto erroff_in_line = erroff - line_with_error.sf_begin;
 
@@ -1039,7 +1039,8 @@ annotate_sql_statement(attr_line_t& al)
             &SQL_COMMENT_ATTR,
         },
         {
-            lnav::pcre2pp::code::from_const(R"(\A(\*|<|>|=|!|\-|\+|\|\|))"),
+            lnav::pcre2pp::code::from_const(
+                R"(\A(\*|\->{1,2}|<|>|=|!|\-|\+|\|\|))"),
             &SQL_OPERATOR_ATTR,
         },
         {

@@ -27,8 +27,10 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "base/fs_util.hh"
 #include "base/humanize.network.hh"
 #include "base/injector.hh"
+#include "base/paths.hh"
 #include "command_executor.hh"
 #include "config.h"
 #include "field_overlay_source.hh"
@@ -299,6 +301,7 @@ rl_change(readline_curses* rc)
                             top_ctx.c_prefix = "";
                             top_ctx.c_show = false;
                         }
+                        tc->set_sync_selection_and_top(top_ctx.c_show);
                     }
                 }
             }
@@ -515,7 +518,7 @@ rl_search_internal(readline_curses* rc, ln_mode_t mode, bool complete = false)
     }
 
     if (!complete) {
-        tc->set_top(lnav_data.ld_search_start_line);
+        tc->set_selection(lnav_data.ld_search_start_line);
     }
     tc->execute_search(rc->get_value().get_string());
 }
@@ -552,7 +555,7 @@ lnav_rl_abort(readline_curses* rc)
     lnav_data.ld_bottom_source.grep_error("");
     switch (lnav_data.ld_mode) {
         case ln_mode_t::SEARCH:
-            tc->set_top(lnav_data.ld_search_start_line);
+            tc->set_selection(lnav_data.ld_search_start_line);
             tc->revert_search();
             break;
         case ln_mode_t::SQL:
@@ -649,11 +652,11 @@ rl_callback_int(readline_curses* rc, bool is_alt)
             if (!rc->get_value().empty()) {
                 auto& bm = tc->get_bookmarks();
                 const auto& bv = bm[&textview_curses::BM_SEARCH];
-                auto vl = is_alt ? bv.prev(tc->get_top())
+                auto vl = is_alt ? bv.prev(tc->get_selection())
                                  : bv.next(tc->get_top());
 
                 if (vl) {
-                    tc->set_top(vl.value());
+                    tc->set_selection(vl.value());
                 } else {
                     tc->set_follow_search_for(2000, [tc, is_alt, &bm]() {
                         if (bm[&textview_curses::BM_SEARCH].empty()) {
@@ -668,17 +671,21 @@ rl_callback_int(readline_curses* rc, bool is_alt)
 
                         if (is_alt) {
                             first_hit = bm[&textview_curses::BM_SEARCH].prev(
-                                vis_line_t(tc->get_top()));
+                                vis_line_t(tc->get_selection()));
                         } else {
                             first_hit = bm[&textview_curses::BM_SEARCH].next(
                                 vis_line_t(tc->get_top() - 1));
                         }
                         if (first_hit) {
                             auto first_hit_vl = first_hit.value();
-                            if (first_hit_vl > 0_vl) {
-                                --first_hit_vl;
+                            if (tc->is_selectable()) {
+                                tc->set_selection(first_hit_vl);
+                            } else {
+                                if (first_hit_vl > 0_vl) {
+                                    --first_hit_vl;
+                                }
+                                tc->set_top(first_hit_vl);
                             }
-                            tc->set_top(first_hit_vl);
                         }
 
                         return true;
@@ -731,23 +738,26 @@ rl_callback_int(readline_curses* rc, bool is_alt)
         }
 
         case ln_mode_t::EXEC: {
-            auto_mem<FILE> tmpout(fclose);
+            auto open_temp_res = lnav::filesystem::open_temp_file(
+                lnav::paths::workdir() / "exec.XXXXXX");
 
-            tmpout = std::tmpfile();
-
-            if (!tmpout) {
+            if (open_temp_res.isErr()) {
                 rc->set_value(fmt::format(
                     FMT_STRING("Unable to open temporary output file: {}"),
-                    strerror(errno)));
+                    open_temp_res.unwrapErr()));
             } else {
-                auto fd_copy = auto_fd::dup_of(fileno(tmpout));
                 char desc[256], timestamp[32];
                 time_t current_time = time(nullptr);
                 const auto path_and_args = rc->get_value();
+                auto tmp_pair = open_temp_res.unwrap();
+                auto fd_copy = tmp_pair.second.dup();
 
                 {
                     exec_context::output_guard og(
-                        ec, "tmp", std::make_pair(tmpout.release(), fclose));
+                        ec,
+                        "tmp",
+                        std::make_pair(fdopen(tmp_pair.second.release(), "w"),
+                                       fclose));
 
                     auto exec_res
                         = execute_file(ec, path_and_args.get_string());
@@ -777,8 +787,8 @@ rl_callback_int(readline_curses* rc, bool is_alt)
                              "Output of %s (%s)",
                              path_and_args.get_string().c_str(),
                              timestamp);
-                    lnav_data.ld_active_files.fc_file_names[desc]
-                        .with_fd(std::move(fd_copy))
+                    lnav_data.ld_active_files.fc_file_names[tmp_pair.first]
+                        .with_filename(desc)
                         .with_include_in_session(false)
                         .with_detect_format(false);
                     lnav_data.ld_files_to_front.emplace_back(desc, 0_vl);
@@ -897,5 +907,7 @@ rl_blur(readline_curses* rc)
                    .get_overlay_source();
 
     fos->fos_contexts.pop();
+    lnav_data.ld_views[LNV_LOG].set_sync_selection_and_top(
+        fos->fos_contexts.top().c_show);
     lnav_data.ld_preview_generation += 1;
 }

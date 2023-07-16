@@ -33,6 +33,7 @@
 #include "textview_curses.hh"
 
 #include "base/ansi_scrubber.hh"
+#include "base/humanize.time.hh"
 #include "base/injector.hh"
 #include "base/time_util.hh"
 #include "config.h"
@@ -79,7 +80,7 @@ text_filter::revert_to_last(logfile_filter_state& lfs, size_t rollback_size)
 void
 text_filter::add_line(logfile_filter_state& lfs,
                       logfile::const_iterator ll,
-                      shared_buffer_ref& line)
+                      const shared_buffer_ref& line)
 {
     bool match_state = this->matches(*lfs.tfs_logfile, ll, line);
 
@@ -124,6 +125,58 @@ text_filter::end_of_message(logfile_filter_state& lfs)
     lfs.tfs_lines_for_message[this->lf_index] = 0;
 }
 
+log_accel::direction_t
+text_accel_source::get_line_accel_direction(vis_line_t vl)
+{
+    log_accel la;
+
+    while (vl >= 0) {
+        const auto* curr_line = this->text_accel_get_line(vl);
+
+        if (!curr_line->is_message()) {
+            --vl;
+            continue;
+        }
+
+        if (!la.add_point(curr_line->get_time_in_millis())) {
+            break;
+        }
+
+        --vl;
+    }
+
+    return la.get_direction();
+}
+
+std::string
+text_accel_source::get_time_offset_for_line(textview_curses& tc, vis_line_t vl)
+{
+    auto ll = this->text_accel_get_line(vl);
+    auto curr_tv = ll->get_timeval();
+    struct timeval diff_tv;
+
+    auto prev_umark = tc.get_bookmarks()[&textview_curses::BM_USER].prev(vl);
+    auto next_umark = tc.get_bookmarks()[&textview_curses::BM_USER].next(vl);
+    auto prev_emark
+        = tc.get_bookmarks()[&textview_curses::BM_USER_EXPR].prev(vl);
+    auto next_emark
+        = tc.get_bookmarks()[&textview_curses::BM_USER_EXPR].next(vl);
+    if (!prev_umark && !prev_emark && (next_umark || next_emark)) {
+        auto next_line = this->text_accel_get_line(
+            std::max(next_umark.value_or(0), next_emark.value_or(0)));
+
+        diff_tv = curr_tv - next_line->get_timeval();
+    } else {
+        auto prev_row
+            = std::max(prev_umark.value_or(0), prev_emark.value_or(0));
+        auto first_line = this->text_accel_get_line(prev_row);
+        auto start_tv = first_line->get_timeval();
+        diff_tv = curr_tv - start_tv;
+    }
+
+    return humanize::time::duration::from_tv(diff_tv).to_string();
+}
+
 const bookmark_type_t textview_curses::BM_USER("user");
 const bookmark_type_t textview_curses::BM_USER_EXPR("user-expr");
 const bookmark_type_t textview_curses::BM_SEARCH("search");
@@ -155,11 +208,13 @@ textview_curses::reload_config(error_reporter& reporter)
         iter = this->tc_highlights.erase(iter);
     }
 
-    std::map<std::string, std::string> vars;
+    std::map<std::string, scoped_value_t> vars;
     auto curr_theme_iter
         = lnav_config.lc_ui_theme_defs.find(lnav_config.lc_ui_theme);
     if (curr_theme_iter != lnav_config.lc_ui_theme_defs.end()) {
-        vars = curr_theme_iter->second.lt_vars;
+        for (const auto& vpair : curr_theme_iter->second.lt_vars) {
+            vars[vpair.first] = vpair.second;
+        }
     }
 
     for (const auto& theme_name : {DEFAULT_THEME_NAME, lnav_config.lc_ui_theme})
@@ -194,8 +249,8 @@ textview_curses::reload_config(error_reporter& reporter)
 
             fg1 = sc.sc_color;
             bg1 = sc.sc_background_color;
-            shlex(fg1).eval(fg_color, vars);
-            shlex(bg1).eval(bg_color, vars);
+            shlex(fg1).eval(fg_color, scoped_resolver{&vars});
+            shlex(bg1).eval(bg_color, scoped_resolver{&vars});
 
             auto fg = styling::color_unit::from_str(fg_color).unwrapOrElse(
                 [&](const auto& msg) {
@@ -233,6 +288,10 @@ textview_curses::reload_config(error_reporter& reporter)
                       .with_color(fg, bg)
                       .with_nestable(false);
         }
+    }
+
+    if (this->tc_reload_config_delegate) {
+        this->tc_reload_config_delegate(*this);
     }
 }
 
@@ -287,7 +346,7 @@ void
 textview_curses::grep_end_batch(grep_proc<vis_line_t>& gp)
 {
     if (this->tc_follow_deadline.tv_sec
-        && this->tc_follow_top == this->get_top())
+        && this->tc_follow_selection == this->get_selection())
     {
         struct timeval now;
 
@@ -438,7 +497,6 @@ textview_curses::textview_value_for_row(vis_line_t row, attr_line_t& value_out)
     this->tc_sub_source->text_attrs_for_line(*this, row, sa);
 
     scrub_ansi_string(str, &sa);
-
     struct line_range body, orig_line;
 
     body = find_string_attr_range(sa, &SA_BODY);
@@ -456,6 +514,13 @@ textview_curses::textview_value_for_row(vis_line_t row, attr_line_t& value_out)
     auto format_attr_opt = get_string_attr(sa, SA_FORMAT);
     if (format_attr_opt) {
         format_name = format_attr_opt.value().get();
+    }
+
+    if (this->is_selectable() && row == this->get_selection()
+        && this->tc_cursor_role)
+    {
+        sa.emplace_back(line_range{orig_line.lr_start, -1},
+                        VC_ROLE.value(this->tc_cursor_role.value()));
     }
 
     for (auto& tc_highlight : this->tc_highlights) {
@@ -815,7 +880,7 @@ void
 text_time_translator::scroll_invoked(textview_curses* tc)
 {
     if (tc->get_inner_height() > 0) {
-        this->time_for_row(tc->get_top()) |
+        this->time_for_row(tc->get_selection()) |
             [this](auto new_top_time) { this->ttt_top_time = new_top_time; };
     }
 }
@@ -826,22 +891,23 @@ text_time_translator::data_reloaded(textview_curses* tc)
     if (tc->get_inner_height() == 0) {
         return;
     }
-    if (tc->get_top() > tc->get_inner_height()) {
+    if (tc->get_selection() > tc->get_inner_height()) {
         if (this->ttt_top_time.tv_sec != 0) {
             this->row_for_time(this->ttt_top_time) |
-                [tc](auto new_top) { tc->set_top(new_top); };
+                [tc](auto new_top) { tc->set_selection(new_top); };
         }
         return;
     }
-    this->time_for_row(tc->get_top()) | [this, tc](auto top_time) {
+    this->time_for_row(tc->get_selection()) | [this, tc](auto top_time) {
         if (top_time != this->ttt_top_time) {
             if (this->ttt_top_time.tv_sec != 0) {
                 this->row_for_time(this->ttt_top_time) |
-                    [tc](auto new_top) { tc->set_top(new_top); };
+                    [tc](auto new_top) { tc->set_selection(new_top); };
             }
-            this->time_for_row(tc->get_top()) | [this](auto new_top_time) {
-                this->ttt_top_time = new_top_time;
-            };
+            this->time_for_row(tc->get_selection()) |
+                [this](auto new_top_time) {
+                    this->ttt_top_time = new_top_time;
+                };
         }
     };
 }
@@ -851,7 +917,7 @@ template class bookmark_vector<vis_line_t>;
 bool
 empty_filter::matches(const logfile& lf,
                       logfile::const_iterator ll,
-                      shared_buffer_ref& line)
+                      const shared_buffer_ref& line)
 {
     return false;
 }

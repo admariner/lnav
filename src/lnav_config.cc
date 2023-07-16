@@ -87,11 +87,17 @@ static auto fvc = injector::bind<file_vtab::config>::to_instance(
 static auto lc = injector::bind<lnav::logfile::config>::to_instance(
     +[]() { return &lnav_config.lc_logfile; });
 
+static auto p = injector::bind<lnav::piper::config>::to_instance(
+    +[]() { return &lnav_config.lc_piper; });
+
 static auto tc = injector::bind<tailer::config>::to_instance(
     +[]() { return &lnav_config.lc_tailer; });
 
 static auto scc = injector::bind<sysclip::config>::to_instance(
     +[]() { return &lnav_config.lc_sysclip; });
+
+static auto uh = injector::bind<lnav::url_handler::config>::to_instance(
+    +[]() { return &lnav_config.lc_url_handlers; });
 
 static auto lsc = injector::bind<logfile_sub_source_ns::config>::to_instance(
     +[]() { return &lnav_config.lc_log_source; });
@@ -137,7 +143,23 @@ ensure_dotlnav()
         log_perror(mkdir(full_path.c_str(), 0755));
     }
 
-    lnav_log_crash_dir = strdup(path.c_str());
+    auto crash_dir_path = path / "crash";
+    lnav_log_crash_dir = strdup(crash_dir_path.c_str());
+
+    {
+        static_root_mem<glob_t, globfree> gl;
+        auto crash_glob = path / "crash-*";
+
+        if (glob(crash_glob.c_str(), GLOB_NOCHECK, nullptr, gl.inout()) == 0) {
+            std::error_code ec;
+            for (size_t lpc = 0; lpc < gl->gl_pathc; lpc++) {
+                auto crash_file = ghc::filesystem::path(gl->gl_pathv[lpc]);
+
+                ghc::filesystem::rename(
+                    crash_file, crash_dir_path / crash_file.filename(), ec);
+            }
+        }
+    }
 
     {
         static_root_mem<glob_t, globfree> gl;
@@ -336,7 +358,7 @@ update_installs_from_git()
     auto git_formats = lnav::paths::dotlnav() / "formats/*/.git";
     bool found = false, retval = true;
 
-    if (glob(git_formats.c_str(), GLOB_NOCHECK, nullptr, gl.inout()) == 0) {
+    if (glob(git_formats.c_str(), 0, nullptr, gl.inout()) == 0) {
         for (int lpc = 0; lpc < (int) gl->gl_pathc; lpc++) {
             auto git_dir
                 = ghc::filesystem::path(gl->gl_pathv[lpc]).parent_path();
@@ -508,6 +530,23 @@ static const struct json_path_container keymap_defs_handlers = {
         .with_children(keymap_def_handlers),
 };
 
+static const json_path_handler_base::enum_value_t _movement_values[] = {
+    {"top", config_movement_mode::TOP},
+    {"cursor", config_movement_mode::CURSOR},
+
+    json_path_handler_base::ENUM_TERMINATOR,
+};
+
+static const struct json_path_container movement_handlers = {
+    yajlpp::property_handler("mode")
+        .with_synopsis("top|cursor")
+        .with_enum_values(_movement_values)
+        .with_example("top")
+        .with_example("cursor")
+        .with_description("The mode of cursor movement to use.")
+        .for_field<>(&_lnav_config::lc_ui_movement, &movement_config::mode),
+};
+
 static const struct json_path_container global_var_handlers = {
     yajlpp::pattern_property_handler("(?<var_name>\\w+)")
         .with_synopsis("<name>")
@@ -585,6 +624,10 @@ static const struct json_path_container theme_styles_handlers = {
     yajlpp::property_handler("hidden")
         .with_description("Styling for hidden fields in logs")
         .for_child(&lnav_theme::lt_style_hidden)
+        .with_children(style_config_handlers),
+    yajlpp::property_handler("cursor-line")
+        .with_description("Styling for the cursor line in the main view")
+        .for_child(&lnav_theme::lt_style_cursor_line)
         .with_children(style_config_handlers),
     yajlpp::property_handler("adjusted-time")
         .with_description("Styling for timestamps that have been adjusted")
@@ -992,6 +1035,9 @@ static const struct json_path_container ui_handlers = {
     yajlpp::property_handler("theme-defs")
         .with_description("Theme definitions.")
         .with_children(theme_defs_handlers),
+    yajlpp::property_handler("movement")
+        .with_description("Log file cursor movement mode settings")
+        .with_children(movement_handlers),
     yajlpp::property_handler("keymap-defs")
         .with_description("Keymap definitions.")
         .with_children(keymap_defs_handlers),
@@ -1015,6 +1061,19 @@ static const struct json_path_container archive_handlers = {
         .with_example("12h")
         .for_field(&_lnav_config::lc_archive_manager,
                    &archive_manager::config::amc_cache_ttl),
+};
+
+static const struct json_path_container piper_handlers = {
+    yajlpp::property_handler("max-size")
+        .with_synopsis("<bytes>")
+        .with_description("The maximum size of a capture file")
+        .with_min_value(128)
+        .for_field(&_lnav_config::lc_piper, &lnav::piper::config::c_max_size),
+    yajlpp::property_handler("rotations")
+        .with_synopsis("<count>")
+        .with_min_value(2)
+        .with_description("The number of rotated files to keep")
+        .for_field(&_lnav_config::lc_piper, &lnav::piper::config::c_rotations),
 };
 
 static const struct json_path_container file_vtab_handlers = {
@@ -1201,10 +1260,40 @@ static const struct json_path_container log_source_handlers = {
         .with_children(log_source_watch_handlers),
 };
 
+static const struct json_path_container url_scheme_handlers = {
+    yajlpp::property_handler("handler")
+        .with_description(
+            "The name of the lnav script that can handle URLs "
+            "with of this scheme.  This should not include the '.lnav' suffix.")
+        .with_pattern(R"(^[\w\-]+(?!\.lnav)$)")
+        .for_field(&lnav::url_handler::scheme::p_handler),
+};
+
+static const struct json_path_container url_handlers = {
+    yajlpp::pattern_property_handler(R"((?<url_scheme>\w+))")
+        .with_description("Definition of a custom URL scheme")
+        .with_obj_provider<lnav::url_handler::scheme, _lnav_config>(
+            [](const yajlpp_provider_context& ypc, _lnav_config* root) {
+                auto& retval = root->lc_url_handlers
+                                   .c_schemes[ypc.get_substr("url_scheme")];
+                return &retval;
+            })
+        .with_path_provider<_lnav_config>(
+            [](struct _lnav_config* cfg, std::vector<std::string>& paths_out) {
+                for (const auto& iter : cfg->lc_url_handlers.c_schemes) {
+                    paths_out.emplace_back(iter.first);
+                }
+            })
+        .with_children(url_scheme_handlers),
+};
+
 static const struct json_path_container tuning_handlers = {
     yajlpp::property_handler("archive-manager")
         .with_description("Settings related to opening archive files")
         .with_children(archive_handlers),
+    yajlpp::property_handler("piper")
+        .with_description("Settings related to capturing piped data")
+        .with_children(piper_handlers),
     yajlpp::property_handler("file-vtab")
         .with_description("Settings related to the lnav_file virtual-table")
         .with_children(file_vtab_handlers),
@@ -1217,6 +1306,9 @@ static const struct json_path_container tuning_handlers = {
     yajlpp::property_handler("clipboard")
         .with_description("Settings related to the clipboard")
         .with_children(sysclip_handlers),
+    yajlpp::property_handler("url-scheme")
+        .with_description("Settings related to custom URL handling")
+        .with_children(url_handlers),
 };
 
 const char* DEFAULT_CONFIG_SCHEMA
@@ -1344,6 +1436,7 @@ load_config_from(_lnav_config& lconfig,
     struct config_userdata ud(errors);
     auto_fd fd;
 
+    log_info("loading configuration from %s", path.c_str());
     ypc.ypc_locations = &lnav_config_locations;
     ypc.with_obj(lconfig);
     ypc.ypc_userdata = &ud;
@@ -1461,7 +1554,7 @@ load_config(const std::vector<ghc::filesystem::path>& extra_paths,
         log_info("loading builtin configuration into base");
         load_default_configs(lnav_config, "*", errors);
 
-        log_info("loading user configuration files");
+        log_info("loading installed configuration files");
         for (const auto& extra_path : extra_paths) {
             auto config_path = extra_path / "configs/*/*.json";
             static_root_mem<glob_t, globfree> gl;
@@ -1498,6 +1591,19 @@ load_config(const std::vector<ghc::filesystem::path>& extra_paths,
     reload_config(errors);
 
     rollback_lnav_config = lnav_config;
+}
+
+std::string
+dump_config()
+{
+    yajlpp_gen gen;
+    yajlpp_gen_context ygc(gen, lnav_config_handlers);
+
+    yajl_gen_config(gen, yajl_gen_beautify, true);
+    ygc.with_obj(lnav_config);
+    ygc.gen();
+
+    return gen.to_string_fragment().to_string();
 }
 
 void
@@ -1591,31 +1697,36 @@ reload_config(std::vector<lnav::console::user_message>& errors)
     while (curr != nullptr) {
         auto reporter = [&errors](const void* cfg_value,
                                   const lnav::console::user_message& errmsg) {
+            log_error("configuration error: %s",
+                      errmsg.to_attr_line().get_string().c_str());
             auto cb = [&cfg_value, &errors, &errmsg](
                           const json_path_handler_base& jph,
                           const std::string& path,
-                          void* mem) {
+                          const void* mem) {
                 if (mem != cfg_value) {
                     return;
                 }
 
                 auto loc_iter
                     = lnav_config_locations.find(intern_string::lookup(path));
-                if (loc_iter == lnav_config_locations.end()) {
-                    return;
+                auto has_loc = loc_iter != lnav_config_locations.end();
+                auto um
+                    = lnav::console::user_message::error(
+                          attr_line_t()
+                              .append(has_loc ? "invalid value for property "
+                                              : "missing value for property ")
+                              .append_quoted(lnav::roles::symbol(path)))
+                          .with_reason(errmsg)
+                          .with_help(jph.get_help_text(path));
+
+                if (has_loc) {
+                    um.with_snippet(
+                        lnav::console::snippet::from(loc_iter->second.sl_source,
+                                                     "")
+                            .with_line(loc_iter->second.sl_line_number));
                 }
 
-                errors.emplace_back(
-                    lnav::console::user_message::error(
-                        attr_line_t()
-                            .append("invalid value for property ")
-                            .append_quoted(lnav::roles::symbol(path)))
-                        .with_reason(errmsg)
-                        .with_snippet(
-                            lnav::console::snippet::from(
-                                loc_iter->second.sl_source, "")
-                                .with_line(loc_iter->second.sl_line_number))
-                        .with_help(jph.get_help_text(path)));
+                errors.emplace_back(um);
             };
 
             for (const auto& jph : lnav_config_handlers.jpc_children) {

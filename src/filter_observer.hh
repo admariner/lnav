@@ -50,9 +50,9 @@ public:
     }
 
     void logline_new_lines(const logfile& lf,
-                           logfile::const_iterator ll_begin,
+                           logfile::const_iterator ll_baegin,
                            logfile::const_iterator ll_end,
-                           shared_buffer_ref& sbr) override;
+                           const shared_buffer_ref& sbr) override;
 
     void logline_eof(const logfile& lf) override;
 

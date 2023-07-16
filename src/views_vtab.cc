@@ -189,7 +189,9 @@ CREATE TABLE lnav_views (
     paused INTEGER,         -- Indicates if the view is paused and will not load new data.
     search TEXT,            -- The text to search for in the view.
     filtering INTEGER,      -- Indicates if the view is applying filters.
-    top_meta TEXT           -- A JSON object that contains metadata related to the top line in the view.
+    movement TEXT,          -- The movement mode, either 'top' or 'cursor'.
+    top_meta TEXT,          -- A JSON object that contains metadata related to the top line in the view.
+    selection INTEGER       -- The number of the line that is focused for selection.
 );
 )";
 
@@ -277,6 +279,13 @@ CREATE TABLE lnav_views (
                 break;
             }
             case 10: {
+                sqlite3_result_text(ctx,
+                                    tc.is_selectable() ? "cursor" : "top",
+                                    -1,
+                                    SQLITE_STATIC);
+                break;
+            }
+            case 11: {
                 static const size_t MAX_POSSIBILITIES = 128;
 
                 auto* tss = tc.get_sub_source();
@@ -332,6 +341,9 @@ CREATE TABLE lnav_views (
                 }
                 break;
             }
+            case 12:
+                sqlite3_result_int(ctx, (int) tc.get_selection());
+                break;
         }
 
         return SQLITE_OK;
@@ -363,7 +375,9 @@ CREATE TABLE lnav_views (
                    bool is_paused,
                    const char* search,
                    bool do_filtering,
-                   const char* top_meta)
+                   string_fragment movement,
+                   const char* top_meta,
+                   int64_t selection)
     {
         auto& tc = lnav_data.ld_views[index];
         auto* time_source
@@ -371,6 +385,9 @@ CREATE TABLE lnav_views (
 
         if (tc.get_top() != top_row) {
             tc.set_top(vis_line_t(top_row));
+            if (!tc.is_selectable()) {
+                selection = top_row;
+            }
         } else if (top_time != nullptr && time_source != nullptr) {
             date_time_scanner dts;
             struct timeval tv;
@@ -383,12 +400,18 @@ CREATE TABLE lnav_views (
                     if (tv != last_time) {
                         time_source->row_for_time(tv) |
                             [&tc](auto row) { tc.set_top(row); };
+                        if (!tc.is_selectable()) {
+                            selection = tc.get_top();
+                        }
                     }
                 }
             } else {
                 tab->zErrMsg = sqlite3_mprintf("Invalid time: %s", top_time);
                 return SQLITE_ERROR;
             }
+        }
+        if (tc.get_selection() != selection) {
+            tc.set_selection(vis_line_t(selection));
         }
         if (top_meta != nullptr) {
             static const intern_string_t SQL_SRC
@@ -425,7 +448,7 @@ CREATE TABLE lnav_views (
                     auto curr_anchor = ta->anchor_for_row(tc.get_top());
 
                     if (!curr_anchor || curr_anchor.value() != req_anchor) {
-                        tc.set_top(req_anchor_top.value());
+                        tc.set_selection(req_anchor_top.value());
                     }
                 } else {
                     tab->zErrMsg = sqlite3_mprintf(
@@ -434,10 +457,26 @@ CREATE TABLE lnav_views (
                 }
             }
         }
+        if (movement == "top" && tc.is_selectable()) {
+            tc.set_selectable(false);
+        } else if (movement == "cursor" && !tc.is_selectable()) {
+            // First, toggle modes, otherwise get_selection() returns top
+            tc.set_selectable(true);
+
+            auto cur_sel = tc.get_selection();
+            auto cur_top = tc.get_top();
+            auto cur_bot = tc.get_bottom() - tc.get_tail_space();
+
+            if (cur_sel < cur_top) {
+                tc.set_selection(cur_top);
+            } else if (cur_sel > cur_bot) {
+                tc.set_selection(cur_bot);
+            }
+        }
         tc.set_left(left);
         tc.set_paused(is_paused);
         tc.execute_search(search);
-        auto tss = tc.get_sub_source();
+        auto* tss = tc.get_sub_source();
         if (tss != nullptr && tss->tss_supports_filtering
             && tss->tss_apply_filters != do_filtering)
         {

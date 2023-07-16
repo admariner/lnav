@@ -33,6 +33,7 @@
 
 #include "ansi_scrubber.hh"
 
+#include "ansi_vars.hh"
 #include "base/opt_util.hh"
 #include "config.h"
 #include "pcrepp/pcre2pp.hh"
@@ -243,7 +244,7 @@ scrub_ansi_string(std::string& str, string_attrs_t* sa)
         struct line_range lr;
         bool has_attrs = false;
         text_attrs attrs;
-        auto role = nonstd::optional<role_t>();
+        nonstd::optional<role_t> role;
         size_t lpc;
 
         switch (terminator[0]) {
