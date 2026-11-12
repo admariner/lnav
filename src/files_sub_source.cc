@@ -226,7 +226,6 @@ files_sub_source::list_input_handle_key(listview_curses& lv, const ncinput& ch)
                           // keep the next scan from finding it again.
                           fc.fc_closed_files.insert(key);
                           fc.fc_name_to_stubs->writeAccess()->erase(key);
-                          fc.fc_invalidate_merge = true;
                           lv.reload_data();
                       },
                       [](files_model::other_selection) {},

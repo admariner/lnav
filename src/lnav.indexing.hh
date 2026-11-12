@@ -44,7 +44,7 @@ struct rebuild_indexes_result_t {
 rebuild_indexes_result_t rebuild_indexes(
     std::optional<ui_clock::time_point> deadline = std::nullopt);
 void rebuild_indexes_repeatedly();
-bool rescan_files(bool required = false);
+void rescan_files(bool required = false);
 bool update_active_files(file_collection& new_files);
 lnav::progress_result_t do_observer_update(const logfile* lf);
 

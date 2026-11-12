@@ -211,8 +211,6 @@ private:
 };
 
 struct file_collection {
-    bool fc_invalidate_merge{false};
-
     bool fc_recursive{false};
     bool fc_rotated{false};
     /**

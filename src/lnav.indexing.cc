@@ -164,6 +164,7 @@ do_observer_update(const logfile* lf)
             lnav_data.ld_files_view.set_top(vis_line_t(row > 0 ? row - 1 : 0));
             lnav_data.ld_files_view.reload_data();
             lnav_data.ld_files_view.do_update();
+            break;
         }
     }
     return lnav_data.ld_status_refresher(lnav::func::op_type::interactive);
@@ -386,7 +387,7 @@ rebuild_indexes(std::optional<ui_clock::time_point> deadline)
     auto& lss = lnav_data.ld_log_source;
     auto& log_view = lnav_data.ld_views[LNV_LOG];
     auto& text_view = lnav_data.ld_views[LNV_TEXT];
-    bool scroll_downs[LNV__MAX];
+    bool scroll_downs[LNV__MAX]{};
     std::optional<text_time_translator::row_info> scroll_down_sels[LNV__MAX];
     rebuild_indexes_result_t retval;
     bool is_headless = lnav_data.ld_flags.is_set<lnav_flags::headless>();
@@ -649,12 +650,6 @@ rebuild_indexes_repeatedly()
 bool
 update_active_files(file_collection& new_files)
 {
-    if (lnav_data.ld_active_files.fc_invalidate_merge) {
-        lnav_data.ld_active_files.fc_invalidate_merge = false;
-
-        return true;
-    }
-
     const auto was_below_open_file_limit
         = lnav_data.ld_active_files.is_below_open_file_limit();
 
@@ -709,7 +704,7 @@ update_active_files(file_collection& new_files)
     return true;
 }
 
-bool
+void
 rescan_files(bool req)
 {
     auto& mlooper = injector::get<main_looper&, services::main_t>();
@@ -739,10 +734,6 @@ rescan_files(bool req)
                 all_synced = false;
             }
         }
-        if (!lnav_data.ld_active_files.fc_name_to_stubs->readAccess()->empty())
-        {
-            return false;
-        }
         if (!all_synced) {
             delay = 30ms;
         }
@@ -754,8 +745,11 @@ rescan_files(bool req)
         if (!done && !headless) {
             lnav_data.ld_files_view.set_needs_update();
             lnav_data.ld_files_view.do_update();
-            lnav_data.ld_status_refresher(lnav::func::op_type::interactive);
+            if (lnav_data.ld_status_refresher(lnav::func::op_type::interactive)
+                == lnav::progress_result_t::interrupt)
+            {
+                done = true;
+            }
         }
     } while (!done && lnav_data.ld_looping);
-    return true;
 }
