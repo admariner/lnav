@@ -350,8 +350,17 @@ Features:
   rendered with the element's `default-value`, the same as
   a missing field.  Fields with a `null` value now always
   use the `default-value` instead of displaying "null".
+* Files inside Kubernetes containers can now be opened using
+  the same syntax as `kubectl cp`, with an optional container
+  name: `namespace/pod[/container]:/path/to/file`.  This works
+  like the existing SSH-based mechanism where the "tailer"
+  is transferred to the remote and serves up the files, except
+  `kubectl exec` is used with the current context.
 
 Interface Changes:
+* The `/tuning/remote/ssh/transfer-command` configuration
+  property is no longer used.  The tailer is transferred by a
+  built-in script that needs `head` on the remote host.
 * Moving horizontally now defaults to moving to the
   next "column" in the content instead of half the
   width of the view.  This should make it easier to
@@ -385,6 +394,9 @@ Performance:
   column's index hasn't been built yet, instead of
   scanning the whole log to build the index first.
 * Memory usage has been reduced.
+* Opening remote files is faster: the tailer is now transferred
+  and started over a single connection instead of two or three,
+  and file contents are compressed when they are sent back.
 
 Bug Fixes:
 * Bookmarks in the TEXT view should be more stable.

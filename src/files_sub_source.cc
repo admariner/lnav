@@ -256,7 +256,7 @@ files_sub_source::text_line_count()
 size_t
 files_sub_source::text_line_width(textview_curses& curses)
 {
-    return 512;
+    return FOCUSED_WIDTH;
 }
 
 line_info
@@ -341,10 +341,7 @@ files_sub_source::text_value_for_line(textview_curses& tc,
 
             al.appendf(FMT_STRING("{:<{}}"), fn, filename_width);
         }
-        al.append("   ")
-            .appendf(FMT_STRING("{:14}"), iter->second.ofd_format)
-            .append("  ")
-            .append(iter->second.ofd_description);
+        al.append("   ").appendf(FMT_STRING("{:14}"), iter->second.ofd_format);
         if (selected) {
             al.with_attr_for_all(VC_ROLE.value(cursor_role));
         }
@@ -583,17 +580,22 @@ files_sub_source::text_selection_changed(textview_curses& tc)
     std::vector<attr_line_t> details;
 
     this->fss_details_mtime = std::chrono::microseconds::zero();
+    this->fss_details_netloc = std::nullopt;
     sel.match(
         [](files_model::no_selection) {},
 
         [&details](const files_model::stub_selection& es) {
             es.sb_iter.sd_description.to_attr_line().split_lines(details);
         },
-        [&details](const files_model::other_selection& os) {
+        [&details, this](const files_model::other_selection& os) {
             auto path = std::filesystem::path(os.sb_iter->first);
 
             details.emplace_back(
                 attr_line_t().appendf(FMT_STRING("Full path: {}"), path));
+            if (os.sb_iter->second.ofd_format == file_format_t::REMOTE) {
+                this->append_remote_details(os.sb_iter->first, details);
+                return;
+            }
             details.emplace_back(attr_line_t("  ").append("Match Details"_h3));
             for (const auto& msg : os.sb_iter->second.ofd_details) {
                 auto msg_al = msg.to_attr_line();
@@ -1018,4 +1020,126 @@ files_sub_source::text_selection_changed(textview_curses& tc)
         });
 
     this->fss_details_source->replace_with(details);
+    if (this->fss_details_netloc) {
+        // The panel is only a few lines tall and the remote's log, which
+        // is what shows what is going on, is at the end.
+        lnav_data.ld_file_details_view.set_selection_to_last_row();
+    }
+}
+
+void
+files_sub_source::append_remote_details(const std::string& path,
+                                        std::vector<attr_line_t>& details)
+{
+    static constexpr auto NAME_WIDTH = 17;
+
+    auto rp_opt = humanize::network::path::from_str(path);
+    if (!rp_opt) {
+        return;
+    }
+
+    const auto& loc = rp_opt->p_locality;
+    auto netloc = fmt::to_string(rp_opt->home());
+    auto field = [&details](const char* name, auto value) {
+        details.emplace_back(attr_line_t()
+                                 .append(lnav::roles::h3(name))
+                                 .right_justify(NAME_WIDTH)
+                                 .append(": ")
+                                 .append(value));
+    };
+    auto level_to_role = [](lnav::console::user_message::level level) {
+        switch (level) {
+            case lnav::console::user_message::level::ok:
+                return role_t::VCR_OK;
+            case lnav::console::user_message::level::warning:
+                return role_t::VCR_WARNING;
+            case lnav::console::user_message::level::error:
+            case lnav::console::user_message::level::fatal:
+                return role_t::VCR_ERROR;
+            default:
+                return role_t::VCR_TEXT;
+        }
+    };
+
+    this->fss_details_netloc = netloc;
+
+    details.emplace_back(attr_line_t("  ").append("Remote"_h2));
+    if (loc.l_transport == network::transport_t::kubectl) {
+        field("Transport", "kubectl");
+        field("Namespace",
+              lnav::roles::identifier(loc.l_namespace.value_or("")));
+        field("Pod", lnav::roles::identifier(loc.l_hostname));
+        if (loc.l_container) {
+            field("Container",
+                  lnav::roles::identifier(loc.l_container.value()));
+        } else {
+            field("Container", lnav::roles::comment("(default)"));
+        }
+    } else {
+        field("Transport", "ssh");
+        field("Host", lnav::roles::identifier(fmt::to_string(loc)));
+    }
+    field("Remote Path", lnav::roles::file(rp_opt->p_path));
+
+    auto sp = lnav_data.ld_active_files.fc_progress->readAccess();
+    auto status_iter = sp->sp_remotes.find(netloc);
+    if (status_iter == sp->sp_remotes.end()) {
+        return;
+    }
+
+    const auto& rs = status_iter->second;
+    field("Status",
+          attr_line_t().append(
+              rs.rs_state, VC_ROLE.value(level_to_role(rs.rs_state_level))));
+    if (!rs.rs_uname.empty()) {
+        field("System", rs.rs_uname);
+    }
+
+    details.emplace_back(attr_line_t("  ").append("Log"_h2));
+    for (const auto& entry : rs.rs_log) {
+        auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+            entry.le_time.time_since_epoch());
+        auto secs = std::chrono::duration_cast<std::chrono::seconds>(us);
+        auto local_us = std::chrono::microseconds{
+            std::chrono::seconds{convert_log_time_to_local(secs.count())}
+            + (us - secs)};
+        // Only the time of day, with milliseconds, since the connection
+        // steps are close together.
+        auto time_str = lnav::to_rfc3339_string(local_us, 'T').substr(11, 12);
+        const auto& um = entry.le_message;
+        auto lines = um.to_attr_line().rtrim().split_lines();
+        for (size_t lpc = 0; lpc < lines.size(); lpc++) {
+            auto line = attr_line_t("    ");
+
+            if (lpc == 0) {
+                line.append(lnav::roles::time_ago(time_str)).append("  ");
+            } else {
+                line.append(time_str.size() + 2, ' ');
+            }
+            details.emplace_back(line.append(lines[lpc]));
+        }
+    }
+}
+
+void
+files_sub_source::remote_status_changed(const std::string& netloc)
+{
+    if (this->fss_details_netloc != netloc
+        || this->fss_details_source == nullptr)
+    {
+        return;
+    }
+
+    // Keep following the log, unless the user has moved away from the end
+    // to look at something.
+    auto& details_view = lnav_data.ld_file_details_view;
+    auto old_sel = details_view.get_selection();
+    auto at_end = !old_sel
+        || old_sel.value() + 1_vl >= details_view.get_inner_height();
+
+    this->text_selection_changed(lnav_data.ld_files_view);
+    if (!at_end) {
+        details_view.set_selection(old_sel.value());
+    }
+    details_view.reload_data();
 }

@@ -62,6 +62,8 @@ public:
 
     bool next(log_cursor& lc, logfile_sub_source& lss) override;
 
+    void filter(log_cursor& lc, logfile_sub_source& lss) override;
+
     void extract(const log_cursor::extract_context& ec,
                  logfile* lf,
                  uint64_t line_number,

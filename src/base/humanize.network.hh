@@ -57,6 +57,15 @@ struct formatter<network::locality> {
     template<typename FormatContext>
     auto format(const network::locality& l, FormatContext& ctx) const
     {
+        if (l.l_transport == network::transport_t::kubectl) {
+            return format_to(ctx.out(),
+                             "{}/{}{}{}",
+                             l.l_namespace.value_or(std::string()),
+                             l.l_hostname,
+                             l.l_container ? "/" : "",
+                             l.l_container.value_or(std::string()));
+        }
+
         bool is_ipv6 = l.l_hostname.find(':') != std::string::npos;
 
         return format_to(ctx.out(),

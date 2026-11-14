@@ -48,6 +48,7 @@
 #include "lnav_util.hh"
 #include "logfile_sub_source.hh"
 #include "logline_window.hh"
+#include "pcrepp/wildcards.hh"
 #include "sql_util.hh"
 #include "vtab_module.hh"
 #include "vtab_module_json.hh"
@@ -98,6 +99,8 @@ const std::unordered_set<string_fragment, frag_hasher>
         "log_named_searches"_frag,
         "log_msg_line_count"_frag,
         "log_time_usecs"_frag,
+        "log_file_line"_frag,
+        "log_file_line_count"_frag,
 };
 
 static const char* const LOG_COLUMNS = R"(  (
@@ -137,7 +140,9 @@ static const char* const LOG_FOOTER_COLUMNS = R"(
   log_duration     REAL HIDDEN,                       -- The duration associated with this log message
   log_named_searches TEXT HIDDEN,                     -- A JSON list of the named searches that matched this message
   log_msg_line_count INTEGER HIDDEN,                  -- The number of lines in the log message
-  log_time_usecs   INTEGER HIDDEN                     -- The adjusted timestamp for the log message as the number of microseconds from the epoch
+  log_time_usecs   INTEGER HIDDEN,                    -- The adjusted timestamp for the log message as the number of microseconds from the epoch
+  log_file_line    INTEGER HIDDEN,                    -- The line in the log file where the message starts, counting from one
+  log_file_line_count INTEGER HIDDEN                  -- The number of lines the message takes up in the log file
 )";
 
 enum class log_footer_columns : uint32_t {
@@ -170,28 +175,46 @@ enum class log_footer_columns : uint32_t {
     named_searches,
     msg_line_count,
     time_usecs,
+    file_line,
+    file_line_count,
 };
 
 static const string_fragment log_footer_column_names[] = {
-    "log_partition"_frag,      "log_actual_time"_frag,
-    "log_idle_msecs"_frag,     "log_mark"_frag,
-    "log_sticky_mark"_frag,    "log_comment"_frag,
-    "log_tags"_frag,           "log_annotations"_frag,
-    "log_filters"_frag,        "log_opid"_frag,
-    "log_user_opid"_frag,      "log_opid_definition"_frag,
-    "log_format"_frag,         "log_format_regex"_frag,
-    "log_time_msecs"_frag,     "log_path"_frag,
-    "log_unique_path"_frag,    "log_text"_frag,
-    "log_body"_frag,           "log_raw_text"_frag,
-    "log_line_hash"_frag,      "log_line_link"_frag,
-    "log_src_file"_frag,       "log_src_line"_frag,
-    "log_thread_id"_frag,      "log_duration"_frag,
-    "log_named_searches"_frag, "log_msg_line_count"_frag,
+    "log_partition"_frag,
+    "log_actual_time"_frag,
+    "log_idle_msecs"_frag,
+    "log_mark"_frag,
+    "log_sticky_mark"_frag,
+    "log_comment"_frag,
+    "log_tags"_frag,
+    "log_annotations"_frag,
+    "log_filters"_frag,
+    "log_opid"_frag,
+    "log_user_opid"_frag,
+    "log_opid_definition"_frag,
+    "log_format"_frag,
+    "log_format_regex"_frag,
+    "log_time_msecs"_frag,
+    "log_path"_frag,
+    "log_unique_path"_frag,
+    "log_text"_frag,
+    "log_body"_frag,
+    "log_raw_text"_frag,
+    "log_line_hash"_frag,
+    "log_line_link"_frag,
+    "log_src_file"_frag,
+    "log_src_line"_frag,
+    "log_thread_id"_frag,
+    "log_duration"_frag,
+    "log_named_searches"_frag,
+    "log_msg_line_count"_frag,
     "log_time_usecs"_frag,
+    "log_file_line"_frag,
+    "log_file_line_count"_frag,
 };
 
 static_assert(std::size(log_footer_column_names)
-              == static_cast<size_t>(log_footer_columns::time_usecs) + 1);
+              == static_cast<size_t>(log_footer_columns::file_line_count) + 1);
 
 void
 log_vtab_impl::init()
@@ -495,14 +518,29 @@ struct log_vtab {
 };
 
 struct vtab_cursor {
-    bool is_msg_cached() const
+    /** Whether this row's message is in line_values.lvv_sbr (read_msg()). */
+    bool is_msg_read() const
     {
         return this->log_msg_line == this->log_cursor.lc_curr_line;
     }
 
-    void cache_msg(logfile* lf, logfile::const_iterator ll)
+    /**
+     * Whether this row's message was read and extract()ed into line_values,
+     * which the columns that need its values check.
+     */
+    bool is_msg_cached() const
     {
-        if (this->is_msg_cached()) {
+        return this->is_msg_read() && this->log_msg_extracted;
+    }
+
+    /**
+     * Reads this row's message into line_values.lvv_sbr, with its ANSI
+     * escapes removed, once a row: for log_text and the REGEXP constraints on
+     * it, which don't need its values.
+     */
+    void read_msg(logfile* lf, logfile::const_iterator ll)
+    {
+        if (this->is_msg_read()) {
             return;
         }
         auto& sbr = this->line_values.lvv_sbr;
@@ -513,18 +551,31 @@ struct vtab_cursor {
                                   : line_buffer::scan_direction::forward);
         sbr.erase_ansi();
         this->log_msg_line = this->log_cursor.lc_curr_line;
+        this->log_msg_extracted = false;
     }
+
+    /**
+     * Reads this row's message, if it hasn't been, and extract()s its values
+     * into line_values, once a row: for the columns that need them.
+     */
+    void extract_msg(log_vtab* vt,
+                     logfile* lf,
+                     logfile::const_iterator ll,
+                     uint64_t line_number);
 
     void invalidate()
     {
         this->attrs.clear();
         this->line_values.clear();
         this->log_msg_line = -1_vl;
+        this->log_msg_extracted = false;
     }
 
     sqlite3_vtab_cursor base;
     struct log_cursor log_cursor;
     vis_line_t log_msg_line{-1_vl};
+    /** Whether extract() ran on the message read for log_msg_line. */
+    bool log_msg_extracted{false};
     string_attrs_t attrs;
     logline_value_vector line_values;
 };
@@ -603,6 +654,25 @@ static int
 vt_destroy(sqlite3_vtab* p_vt)
 {
     return vt_destructor(p_vt);
+}
+
+void
+vtab_cursor::extract_msg(log_vtab* vt,
+                         logfile* lf,
+                         logfile::const_iterator ll,
+                         uint64_t line_number)
+{
+    this->read_msg(lf, ll);
+    if (this->log_msg_extracted) {
+        return;
+    }
+    require(this->line_values.lvv_sbr.get_data() != nullptr);
+    vt->vi->extract(this->log_cursor.lc_extract_context,
+                    lf,
+                    line_number,
+                    this->attrs,
+                    this->line_values);
+    this->log_msg_extracted = true;
 }
 
 static int vt_next(sqlite3_vtab_cursor* cur);
@@ -758,13 +828,8 @@ populate_indexed_columns(vtab_cursor* vc, log_vtab* vt)
             lf = (*ld)->get_file_ptr();
             auto ll = lf->begin() + line_number;
 
-            vc->cache_msg(lf, ll);
-            require(vc->line_values.lvv_sbr.get_data() != nullptr);
-            vt->vi->extract(vc->log_cursor.lc_extract_context,
-                            lf,
-                            line_number,
-                            vc->attrs,
-                            vc->line_values);
+            // Once a row: the log_body REGEXP check may have extracted it.
+            vc->extract_msg(vt, lf, ll, line_number);
         }
 
         auto sub_col = logline_value_meta::table_column{
@@ -809,6 +874,59 @@ populate_indexed_columns(vtab_cursor* vc, log_vtab* vt)
             }
         }
     }
+}
+
+/**
+ * Whether the cursor's row passes its log_text and log_body REGEXP
+ * constraints, as SQLite's regexp() would decide, so a row that doesn't is
+ * skipped before SQLite reads its columns.  The text is matched in place,
+ * not copied into SQLite.  A row whose body is NULL can't match.
+ */
+static bool
+text_constraints_match(vtab_cursor* vc, log_vtab* vt)
+{
+    const auto& lc = vc->log_cursor;
+    if (lc.lc_text.empty() && lc.lc_body.empty()) {
+        return true;
+    }
+
+    const auto cl = vt->lss->at(lc.lc_curr_line);
+    uint64_t line_number;
+    auto ld = vt->lss->find_data(cl, line_number);
+    auto* lf = (*ld)->get_file_ptr();
+    auto ll = lf->begin() + line_number;
+    const auto& text = vc->line_values.lvv_sbr;
+    const auto& text_meta = text.get_metadata();
+
+    if (!lc.lc_text.empty()) {
+        // Read, not extract()ed: the columns that need the values do that.
+        vc->read_msg(lf, ll);
+        auto sf = text.to_string_fragment();
+        for (const auto& cons : lc.lc_text) {
+            if (!cons.matches_text(sf, text_meta.m_valid_utf)) {
+                return false;
+            }
+        }
+    }
+
+    if (!lc.lc_body.empty()) {
+        vc->extract_msg(vt, lf, ll, line_number);
+        auto body_range = find_string_attr_range(vc->attrs, &SA_BODY);
+        if (!body_range.is_valid()) {
+            return false;
+        }
+        auto sf = string_fragment::from_bytes(
+            text.get_data() + body_range.lr_start, body_range.length());
+        // The format's regexes are UTF mode, so the body starts and ends on
+        // characters: a slice of valid UTF-8 is valid.
+        for (const auto& cons : lc.lc_body) {
+            if (!cons.matches_text(sf, text_meta.m_valid_utf)) {
+                return false;
+            }
+        }
+    }
+
+    return true;
 }
 
 static int
@@ -861,7 +979,8 @@ vt_next(sqlite3_vtab_cursor* cur)
                      vc->log_cursor.lc_scanned_rows);
             done = true;
         } else {
-            done = vt->vi->next(vc->log_cursor, *vt->lss);
+            done = vt->vi->next(vc->log_cursor, *vt->lss)
+                && text_constraints_match(vc, vt);
             if (done) {
                 if (vc->log_cursor.lc_curr_line % 10000 == 0) {
                     log_debug("scanned %d", (int) vc->log_cursor.lc_curr_line);
@@ -878,6 +997,8 @@ vt_next(sqlite3_vtab_cursor* cur)
                     vt->vi->expand_indexes_to(vc->log_cursor.lc_indexed_columns,
                                               vc->log_cursor.lc_curr_line);
                 }
+                // A row the text didn't match leaves its message read.
+                vc->invalidate();
                 vc->log_cursor.advance();
             }
         }
@@ -915,6 +1036,17 @@ vt_next_no_rowid(sqlite3_vtab_cursor* cur)
         if (vl_before != vc->log_cursor.lc_curr_line) {
             vt->vi->expand_indexes_to(vc->log_cursor.lc_indexed_columns,
                                       vl_before);
+        }
+        // At the end, next() returns true but there's no row to check.
+        if (done && !vc->log_cursor.is_eof()
+            && !text_constraints_match(vc, vt))
+        {
+            // Not a row SQLite sees; as with the other row constraints, the
+            // indexes don't take it as looked at.
+            vc->invalidate();
+            vc->log_cursor.advance();
+            done = false;
+            continue;
         }
         if (done) {
             populate_indexed_columns(vc, vt);
@@ -1025,17 +1157,7 @@ vt_column(sqlite3_vtab_cursor* cur, sqlite3_context* ctx, int col)
                         char buffer[64] = "";
 
                         if (ll->is_time_skewed()) {
-                            if (!vc->is_msg_cached()) {
-                                vc->cache_msg(lf, ll);
-                                require(vc->line_values.lvv_sbr.get_data()
-                                        != nullptr);
-                                vt->vi->extract(
-                                    vc->log_cursor.lc_extract_context,
-                                    lf,
-                                    line_number,
-                                    vc->attrs,
-                                    vc->line_values);
-                            }
+                            vc->extract_msg(vt, lf, ll, line_number);
 
                             // The format might not have marked where the
                             // timestamp is, so check before reading from it.
@@ -1232,16 +1354,7 @@ vt_column(sqlite3_vtab_cursor* cur, sqlite3_context* ctx, int col)
                             }
                             break;
                         }
-                        if (!vc->is_msg_cached()) {
-                            vc->cache_msg(lf, ll);
-                            require(vc->line_values.lvv_sbr.get_data()
-                                    != nullptr);
-                            vt->vi->extract(vc->log_cursor.lc_extract_context,
-                                            lf,
-                                            line_number,
-                                            vc->attrs,
-                                            vc->line_values);
-                        }
+                        vc->extract_msg(vt, lf, ll, line_number);
 
                         if (vc->line_values.lvv_opid_value) {
                             to_sqlite(ctx,
@@ -1252,16 +1365,7 @@ vt_column(sqlite3_vtab_cursor* cur, sqlite3_context* ctx, int col)
                         break;
                     }
                     case log_footer_columns::user_opid: {
-                        if (!vc->is_msg_cached()) {
-                            vc->cache_msg(lf, ll);
-                            require(vc->line_values.lvv_sbr.get_data()
-                                    != nullptr);
-                            vt->vi->extract(vc->log_cursor.lc_extract_context,
-                                            lf,
-                                            line_number,
-                                            vc->attrs,
-                                            vc->line_values);
-                        }
+                        vc->extract_msg(vt, lf, ll, line_number);
 
                         if (vc->line_values.lvv_opid_value
                             && vc->line_values.lvv_opid_provenance
@@ -1275,16 +1379,7 @@ vt_column(sqlite3_vtab_cursor* cur, sqlite3_context* ctx, int col)
                         break;
                     }
                     case log_footer_columns::opid_definition: {
-                        if (!vc->is_msg_cached()) {
-                            vc->cache_msg(lf, ll);
-                            require(vc->line_values.lvv_sbr.get_data()
-                                    != nullptr);
-                            vt->vi->extract(vc->log_cursor.lc_extract_context,
-                                            lf,
-                                            line_number,
-                                            vc->attrs,
-                                            vc->line_values);
-                        }
+                        vc->extract_msg(vt, lf, ll, line_number);
 
                         if (vc->line_values.lvv_opid_value) {
                             auto opids = lf->get_opids().readAccess();
@@ -1351,27 +1446,31 @@ vt_column(sqlite3_vtab_cursor* cur, sqlite3_context* ctx, int col)
                         break;
                     }
                     case log_footer_columns::text: {
-                        shared_buffer_ref line;
+                        // Read once a row: the REGEXP check may have.
+                        vc->read_msg(lf, ll);
+                        const auto& sbr = vc->line_values.lvv_sbr;
+                        if (sbr.get_metadata().m_has_ansi) {
+                            // extract() put a format's rendering in its
+                            // place (a JSON format's own table), escapes
+                            // and all, so read the text again without them.
+                            shared_buffer_ref line;
 
-                        lf->read_full_message(ll, line);
-                        line.erase_ansi();
+                            lf->read_full_message(ll, line);
+                            line.erase_ansi();
+                            sqlite3_result_text(ctx,
+                                                line.get_data(),
+                                                line.length(),
+                                                SQLITE_TRANSIENT);
+                            break;
+                        }
                         sqlite3_result_text(ctx,
-                                            line.get_data(),
-                                            line.length(),
+                                            sbr.get_data(),
+                                            sbr.length(),
                                             SQLITE_TRANSIENT);
                         break;
                     }
                     case log_footer_columns::body: {
-                        if (!vc->is_msg_cached()) {
-                            vc->cache_msg(lf, ll);
-                            require(vc->line_values.lvv_sbr.get_data()
-                                    != nullptr);
-                            vt->vi->extract(vc->log_cursor.lc_extract_context,
-                                            lf,
-                                            line_number,
-                                            vc->attrs,
-                                            vc->line_values);
-                        }
+                        vc->extract_msg(vt, lf, ll, line_number);
 
                         auto body_range
                             = find_string_attr_range(vc->attrs, &SA_BODY);
@@ -1437,31 +1536,13 @@ vt_column(sqlite3_vtab_cursor* cur, sqlite3_context* ctx, int col)
                         break;
                     }
                     case log_footer_columns::src_file: {
-                        if (!vc->is_msg_cached()) {
-                            vc->cache_msg(lf, ll);
-                            require(vc->line_values.lvv_sbr.get_data()
-                                    != nullptr);
-                            vt->vi->extract(vc->log_cursor.lc_extract_context,
-                                            lf,
-                                            line_number,
-                                            vc->attrs,
-                                            vc->line_values);
-                        }
+                        vc->extract_msg(vt, lf, ll, line_number);
 
                         to_sqlite(ctx, vc->line_values.lvv_src_file_value);
                         break;
                     }
                     case log_footer_columns::src_line: {
-                        if (!vc->is_msg_cached()) {
-                            vc->cache_msg(lf, ll);
-                            require(vc->line_values.lvv_sbr.get_data()
-                                    != nullptr);
-                            vt->vi->extract(vc->log_cursor.lc_extract_context,
-                                            lf,
-                                            line_number,
-                                            vc->attrs,
-                                            vc->line_values);
-                        }
+                        vc->extract_msg(vt, lf, ll, line_number);
 
                         to_sqlite(ctx, vc->line_values.lvv_src_line_value);
                         break;
@@ -1486,31 +1567,13 @@ vt_column(sqlite3_vtab_cursor* cur, sqlite3_context* ctx, int col)
                             }
                             break;
                         }
-                        if (!vc->is_msg_cached()) {
-                            vc->cache_msg(lf, ll);
-                            require(vc->line_values.lvv_sbr.get_data()
-                                    != nullptr);
-                            vt->vi->extract(vc->log_cursor.lc_extract_context,
-                                            lf,
-                                            line_number,
-                                            vc->attrs,
-                                            vc->line_values);
-                        }
+                        vc->extract_msg(vt, lf, ll, line_number);
 
                         to_sqlite(ctx, vc->line_values.lvv_thread_id_value);
                         break;
                     }
                     case log_footer_columns::duration: {
-                        if (!vc->is_msg_cached()) {
-                            vc->cache_msg(lf, ll);
-                            require(vc->line_values.lvv_sbr.get_data()
-                                    != nullptr);
-                            vt->vi->extract(vc->log_cursor.lc_extract_context,
-                                            lf,
-                                            line_number,
-                                            vc->attrs,
-                                            vc->line_values);
-                        }
+                        vc->extract_msg(vt, lf, ll, line_number);
 
                         std::optional<double> duration_opt;
                         if (vc->line_values.lvv_duration_value) {
@@ -1571,6 +1634,30 @@ vt_column(sqlite3_vtab_cursor* cur, sqlite3_context* ctx, int col)
                             ll->get_time<std::chrono::microseconds>().count());
                         break;
                     }
+                    case log_footer_columns::file_line: {
+                        // For a format that renders a message into several
+                        // lines (JSON), this counts the file's lines from
+                        // its start, so it's meant for a few rows at a time.
+                        sqlite3_result_int64(ctx,
+                                             (int64_t) lf->get_line_number(ll));
+                        break;
+                    }
+                    case log_footer_columns::file_line_count: {
+                        // The message's lines, less the ones a format
+                        // rendered it into (sub-lines), which aren't in the
+                        // file.
+                        int64_t count = 1;
+                        for (auto next = std::next(ll);
+                             next != lf->end() && next->is_continued();
+                             ++next)
+                        {
+                            if (!next->is_sub_line()) {
+                                count += 1;
+                            }
+                        }
+                        sqlite3_result_int64(ctx, count);
+                        break;
+                    }
                 }
             } else {
                 // A table can answer some columns from what lnav keeps per
@@ -1580,15 +1667,7 @@ vt_column(sqlite3_vtab_cursor* cur, sqlite3_context* ctx, int col)
                 {
                     break;
                 }
-                if (!vc->is_msg_cached()) {
-                    vc->cache_msg(lf, ll);
-                    require(vc->line_values.lvv_sbr.get_data() != nullptr);
-                    vt->vi->extract(vc->log_cursor.lc_extract_context,
-                                    lf,
-                                    line_number,
-                                    vc->attrs,
-                                    vc->line_values);
-                }
+                vc->extract_msg(vt, lf, ll, line_number);
 
                 auto sub_col = logline_value_meta::table_column{
                     (size_t) (col - VT_COL_COUNT)};
@@ -1831,6 +1910,8 @@ log_cursor::reset(vis_line_t line_count)
     this->lc_unique_path.clear();
     this->lc_last_unique_path_match = nullptr;
     this->lc_last_unique_path_mismatch = nullptr;
+    this->lc_text.clear();
+    this->lc_body.clear();
     if (this->lc_direction < 0) {
         this->lc_curr_line = line_count - 1_vl;
         this->lc_end_line = -1_vl;
@@ -1950,17 +2031,36 @@ log_cursor::string_constraint::string_constraint(unsigned char op,
                                                  std::string value)
     : sc_op(op), sc_value(std::move(value))
 {
-    if (op == SQLITE_INDEX_CONSTRAINT_REGEXP) {
-        auto compile_res = lnav::pcre2pp::code::from(this->sc_value);
+    // REGEXP's pattern as is; LIKE's and GLOB's translated to PCRE, so
+    // that matches() and matches_text() search with the same pattern.
+    std::optional<std::string> pattern;
+    switch (op) {
+        case SQLITE_INDEX_CONSTRAINT_REGEXP:
+            pattern = this->sc_value;
+            break;
+        case SQLITE_INDEX_CONSTRAINT_LIKE:
+            pattern = lnav::wildcards::like_to_pcre(
+                string_fragment::from_str(this->sc_value));
+            break;
+        case SQLITE_INDEX_CONSTRAINT_GLOB:
+            pattern = lnav::wildcards::glob_to_pcre(
+                string_fragment::from_str(this->sc_value));
+            break;
+        default:
+            break;
+    }
+    if (!pattern) {
+        return;
+    }
 
-        if (compile_res.isErr()) {
-            auto ce = compile_res.unwrapErr();
-            log_error("unable to compile regexp constraint: %s -- %s",
-                      this->sc_value.c_str(),
-                      ce.get_message().c_str());
-        } else {
-            this->sc_pattern = compile_res.unwrap().to_shared();
-        }
+    auto compile_res = lnav::pcre2pp::code::from(pattern.value());
+    if (compile_res.isErr()) {
+        auto ce = compile_res.unwrapErr();
+        log_error("unable to compile the pattern of a constraint: %s -- %s",
+                  pattern->c_str(),
+                  ce.get_message().c_str());
+    } else {
+        this->sc_pattern = compile_res.unwrap().to_shared();
     }
 }
 
@@ -1983,23 +2083,64 @@ log_cursor::string_constraint::matches(const std::string& sf) const
         case SQLITE_INDEX_CONSTRAINT_GE:
             return sf >= this->sc_value;
         case SQLITE_INDEX_CONSTRAINT_LIKE:
-            return sqlite3_strlike(this->sc_value.c_str(), sf.data(), 0) == 0;
         case SQLITE_INDEX_CONSTRAINT_GLOB:
-            return sqlite3_strglob(this->sc_value.c_str(), sf.data()) == 0;
-        case SQLITE_INDEX_CONSTRAINT_REGEXP: {
-            if (this->sc_pattern != nullptr) {
-                return this->sc_pattern->find_in(sf, PCRE2_NO_UTF_CHECK)
-                    .ignore_error()
-                    .has_value();
+        case SQLITE_INDEX_CONSTRAINT_REGEXP:
+            if (this->sc_pattern == nullptr) {
+                switch (this->sc_op) {
+                    case SQLITE_INDEX_CONSTRAINT_LIKE:
+                        return sqlite3_strlike(
+                                   this->sc_value.c_str(), sf.c_str(), 0)
+                            == 0;
+                    case SQLITE_INDEX_CONSTRAINT_GLOB:
+                        return sqlite3_strglob(this->sc_value.c_str(),
+                                               sf.c_str())
+                            == 0;
+                    default:
+                        // So that SQLite runs the regexp and reports the
+                        // error.
+                        return true;
+                }
             }
-            // return true here so that the regexp is actually run and fails
-            return true;
-        }
+            // The strings here, like paths, aren't known to be valid UTF-8,
+            // so PCRE checks them.  As with the message text, LIKE's pattern
+            // can match more than SQLite's, which applies the constraint
+            // too.
+            return this->matches_text(string_fragment::from_str(sf), false);
         case SQLITE_INDEX_CONSTRAINT_ISNOTNULL:
             return true;
         default:
             return false;
     }
+}
+
+bool
+log_cursor::string_constraint::matches_text(string_fragment sf,
+                                            bool valid_utf) const
+{
+    switch (this->sc_op) {
+        case SQLITE_INDEX_CONSTRAINT_REGEXP:
+        case SQLITE_INDEX_CONSTRAINT_LIKE:
+        case SQLITE_INDEX_CONSTRAINT_GLOB:
+            break;
+        default:
+            return true;
+    }
+    if (this->sc_pattern == nullptr) {
+        // The pattern didn't compile or translate: SQLite decides (and
+        // reports a bad one).
+        return true;
+    }
+    // PCRE2_NO_UTF_CHECK only for text lnav has validated: on invalid UTF-8
+    // it's undefined behavior.
+    return this->sc_pattern->find_in(sf, valid_utf ? PCRE2_NO_UTF_CHECK : 0)
+        .match([](lnav::pcre2pp::matcher::found) { return true; },
+               [](lnav::pcre2pp::matcher::not_found) { return false; },
+               [this](lnav::pcre2pp::matcher::error) {
+                   // Invalid UTF-8: sql regexp() doesn't match it, but LIKE
+                   // and GLOB match bytes whatever they are, so SQLite
+                   // decides those.
+                   return this->sc_op != SQLITE_INDEX_CONSTRAINT_REGEXP;
+               });
 }
 
 struct vtab_time_range {
@@ -2341,8 +2482,8 @@ vt_filter_constraints::add_footer(int32_t orig_col,
         case log_footer_columns::filters:
         case log_footer_columns::named_searches:
         case log_footer_columns::msg_line_count:
-        case log_footer_columns::text:
-        case log_footer_columns::body:
+        case log_footer_columns::file_line:
+        case log_footer_columns::file_line_count:
         case log_footer_columns::raw_text:
         case log_footer_columns::line_hash:
         case log_footer_columns::opid_definition:
@@ -2350,6 +2491,24 @@ vt_filter_constraints::add_footer(int32_t orig_col,
         case log_footer_columns::src_line:
         case log_footer_columns::duration:
             break;
+        case log_footer_columns::text:
+        case log_footer_columns::body: {
+            // REGEXP, LIKE, and GLOB are taken (see vt_best_index); a pattern
+            // that isn't text is left to SQLite.
+            if ((op != SQLITE_INDEX_CONSTRAINT_REGEXP
+                 && op != SQLITE_INDEX_CONSTRAINT_LIKE
+                 && op != SQLITE_INDEX_CONSTRAINT_GLOB)
+                || sqlite3_value_type(argv[argi]) != SQLITE3_TEXT)
+            {
+                return;
+            }
+            auto& conses = footer_column == log_footer_columns::text
+                ? this->fc_cursor.lc_text
+                : this->fc_cursor.lc_body;
+            conses.emplace_back(op,
+                                from_sqlite<std::string>()(argc, argv, argi));
+            break;
+        }
         case log_footer_columns::line_link: {
             if (sqlite3_value_type(argv[argi]) != SQLITE3_TEXT) {
                 return;
@@ -2360,7 +2519,17 @@ vt_filter_constraints::add_footer(int32_t orig_col,
                 this->fc_cursor.update(
                     op, row_opt.value(), log_cursor::constraint_t::unique);
             } else {
+                // No row has the link, so `log_line_link = ?` has no rows.
+                // Left unconstrained, SQLite would compute every row's link
+                // (a hash of its line) to compare: a scan of the whole log.
+                // A row before the first narrows the scan to nothing, and
+                // later constraints can only narrow it further.
                 log_trace("could not find link: %s", permalink.c_str());
+                if (op == SQLITE_INDEX_CONSTRAINT_EQ) {
+                    this->fc_cursor.update(SQLITE_INDEX_CONSTRAINT_EQ,
+                                           -1_vl,
+                                           log_cursor::constraint_t::unique);
+                }
             }
             break;
         }
@@ -2905,8 +3074,7 @@ vt_filter_constraints::cover_scan()
     auto scan_range
         = msg_range::empty()
               .expand_to(lc.lc_curr_line)
-              .expand_to(lc.lc_end_line
-                         - (lc.lc_direction > 0 ? 1_vl : -1_vl))
+              .expand_to(lc.lc_end_line - (lc.lc_direction > 0 ? 1_vl : -1_vl))
               .get_valid()
               .value();
     lc.lc_indexed_lines_range = msg_range::empty()
@@ -3228,7 +3396,42 @@ vt_best_index(sqlite3_vtab* tab, sqlite3_index_info* p_info)
                         case log_footer_columns::named_searches:
                         case log_footer_columns::msg_line_count:
                         case log_footer_columns::text:
-                        case log_footer_columns::body:
+                        case log_footer_columns::body: {
+                            // `log_text REGEXP ?` (or `regexp(?, log_text)`,
+                            // which SQLite offers the same way), `LIKE ?`,
+                            // and `GLOB ?`: matched in vt_next() on the
+                            // message, without copying it into SQLite, LIKE
+                            // and GLOB as PCRE patterns that match at least
+                            // what they do.  SQLite still applies them to
+                            // the rows that pass.
+                            const char* op_name = nullptr;
+                            switch (op) {
+                                case SQLITE_INDEX_CONSTRAINT_REGEXP:
+                                    op_name = "REGEXP";
+                                    break;
+                                case SQLITE_INDEX_CONSTRAINT_LIKE:
+                                    op_name = "LIKE";
+                                    break;
+                                case SQLITE_INDEX_CONSTRAINT_GLOB:
+                                    op_name = "GLOB";
+                                    break;
+                            }
+                            if (op_name != nullptr) {
+                                argvInUse += 1;
+                                indexes.push_back(constraint);
+                                p_info->aConstraintUsage[lpc].argvIndex
+                                    = argvInUse;
+                                index_desc.emplace_back(fmt::format(
+                                    FMT_STRING("{} {} ?"),
+                                    footer_column == log_footer_columns::text
+                                        ? "log_text"
+                                        : "log_body",
+                                    op_name));
+                            }
+                            break;
+                        }
+                        case log_footer_columns::file_line:
+                        case log_footer_columns::file_line_count:
                         case log_footer_columns::raw_text:
                         case log_footer_columns::line_hash:
                         case log_footer_columns::opid_definition:

@@ -32,6 +32,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 #include "pcre2pp.hh"
+#include "wildcards.hh"
 
 TEST_CASE("marks")
 {
@@ -397,4 +398,41 @@ TEST_CASE("anchored")
     CHECK(re.find_in(sub1).ignore_error().has_value());
     CHECK_FALSE(re.find_in(sub2).ignore_error().has_value());
     CHECK_FALSE(re.find_in(sub3).ignore_error().has_value());
+}
+
+TEST_CASE("lnav::wildcards::like_to_pcre")
+{
+    CHECK(lnav::wildcards::like_to_pcre(string_fragment::from_const("a%b_c"))
+          == "(?si)\\Aa.*b.c\\z");
+    // PCRE's specials are literal.
+    CHECK(lnav::wildcards::like_to_pcre(string_fragment::from_const("a.b$"))
+          == "(?si)\\Aa\\.b\\$\\z");
+    CHECK(!lnav::wildcards::like_to_pcre(string_fragment::from_const("a\xff%")));
+    // Not valid UTF-8 (ww898's read() decides): an overlong '/', a surrogate,
+    // a five-byte form, and a sequence cut short.
+    CHECK(!lnav::wildcards::like_to_pcre(string_fragment::from_const("%\xc0\xaf%")));
+    CHECK(!lnav::wildcards::like_to_pcre(string_fragment::from_const("%\xed\xa0\x80%")));
+    CHECK(!lnav::wildcards::glob_to_pcre(
+        string_fragment::from_const("*\xf8\x88\x80\x80\x80*")));
+    CHECK(!lnav::wildcards::glob_to_pcre(string_fragment::from_const("a\xe2\x82")));
+    // An any-run at an end leaves it unanchored, so PCRE searches for the
+    // rest instead of backtracking through ".*"; adjacent ones are one.
+    CHECK(lnav::wildcards::like_to_pcre(string_fragment::from_const("%x%"))
+          == "(?si)x");
+    CHECK(lnav::wildcards::like_to_pcre(string_fragment::from_const("x%%y%"))
+          == "(?si)\\Ax.*y");
+    CHECK(lnav::wildcards::like_to_pcre(string_fragment::from_const("%")) == "(?si)");
+    CHECK(lnav::wildcards::like_to_pcre(string_fragment::from_const(""))
+          == "(?si)\\A\\z");
+}
+
+TEST_CASE("lnav::wildcards::glob_to_pcre")
+{
+    CHECK(lnav::wildcards::glob_to_pcre(string_fragment::from_const("a*b?"))
+          == "(?s)\\Aa.*b.\\z");
+    // A set that doesn't end matches nothing in GLOB: no pattern.
+    CHECK(!lnav::wildcards::glob_to_pcre(string_fragment::from_const("*[abc")));
+    CHECK(!lnav::wildcards::glob_to_pcre(string_fragment::from_const("a\xff*")));
+    CHECK(lnav::wildcards::glob_to_pcre(string_fragment::from_const("**[ab]*"))
+          == "(?s)[ab]");
 }

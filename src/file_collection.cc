@@ -856,9 +856,14 @@ file_collection::expand_filename(
                         });
                     retval.fc_other_files[path] = file_format_t::REMOTE;
                     {
-                        this->fc_progress->writeAccess()
-                            ->sp_tailers[fmt::to_string(rp.home())]
-                            .tp_message = "Initializing...";
+                        auto netloc = fmt::to_string(rp.home());
+                        auto sp = this->fc_progress->writeAccess();
+
+                        sp->sp_tailers[netloc].tp_message = "Initializing...";
+                        sp->sp_remotes[netloc].add_log(
+                            lnav::console::user_message::raw(
+                                attr_line_t("queued: ")
+                                    .append(lnav::roles::file(rp.p_path))));
                     }
 
                     fq.push_back(
@@ -982,9 +987,8 @@ file_collection::expand_filename(
             }
 
             if (required || access(iter->second.c_str(), R_OK) == 0) {
-                auto& file_loo = glob_loo && path_str != path
-                    ? glob_loo.value()
-                    : loo;
+                auto& file_loo = glob_loo && path_str != path ? glob_loo.value()
+                                                              : loo;
                 auto future_opt = watch_logfile(
                     fq, filename_key, iter->second, file_loo, required);
                 if (future_opt) {

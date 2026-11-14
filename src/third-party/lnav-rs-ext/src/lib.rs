@@ -374,6 +374,12 @@ mod ffi {
         error: String,
     }
 
+    /// A file extension log2src parses and the language it is (an LSP language id).
+    struct SourceLanguageExtension {
+        language: String,
+        extension: String,
+    }
+
     extern "Rust" {
         fn init_ext();
 
@@ -404,6 +410,9 @@ mod ffi {
         fn find_src_file(path: &str) -> String;
 
         fn source_languages() -> Vec<String>;
+
+        /// Every extension log2src parses, whether or not the source has files with it.
+        fn source_language_extensions() -> Vec<SourceLanguageExtension>;
 
         /// Log how the messages matched since the last call were matched, and reset the
         /// counters.  Nothing is logged if no messages were matched.
@@ -800,6 +809,20 @@ fn source_languages() -> Vec<String> {
         .languages()
         .into_iter()
         .map(|lang| lang.as_str().to_string())
+        .collect()
+}
+
+fn source_language_extensions() -> Vec<ffi::SourceLanguageExtension> {
+    log2src::SourceLanguage::all()
+        .iter()
+        .flat_map(|lang| {
+            lang.extensions()
+                .iter()
+                .map(move |ext| ffi::SourceLanguageExtension {
+                    language: lang.as_str().to_string(),
+                    extension: ext.to_string(),
+                })
+        })
         .collect()
 }
 

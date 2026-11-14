@@ -1201,6 +1201,16 @@ private:
     file_off_t lf_index_size{0};
     size_t lf_input_lines{0};
     int lf_index_generation{0};
+    /**
+     * The last answer of get_line_number() for a format that renders
+     * messages into several lines: the file line of lf_index[lnm_index].
+     * Reset whenever lines are removed from lf_index.
+     */
+    struct line_number_memo {
+        size_t lnm_index{0};
+        size_t lnm_line_number{1};
+    };
+    mutable line_number_memo lf_line_number_memo;
     stmt_ids lf_stmt_ids;
     line_ids lf_line_ids;
     bool lf_sort_needed{false};

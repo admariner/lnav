@@ -856,6 +856,7 @@ namespace lnav_rs_ext {
   enum class StmtLevel : ::std::uint8_t;
   enum class LnavLogLevel : ::std::uint8_t;
   struct StartExtResult;
+  struct SourceLanguageExtension;
 }
 
 namespace lnav_rs_ext {
@@ -1159,6 +1160,17 @@ struct StartExtResult final {
 };
 #endif // CXXBRIDGE1_STRUCT_lnav_rs_ext$StartExtResult
 
+#ifndef CXXBRIDGE1_STRUCT_lnav_rs_ext$SourceLanguageExtension
+#define CXXBRIDGE1_STRUCT_lnav_rs_ext$SourceLanguageExtension
+// A file extension log2src parses and the language it is (an LSP language id).
+struct SourceLanguageExtension final {
+  ::rust::String language;
+  ::rust::String extension;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_lnav_rs_ext$SourceLanguageExtension
+
 extern "C" {
 void lnav_rs_ext$cxxbridge1$205$version_info(::rust::String *return$) noexcept {
   ::rust::String (*version_info$)() = ::lnav_rs_ext::version_info;
@@ -1225,6 +1237,8 @@ void lnav_rs_ext$cxxbridge1$205$find_src_file(::rust::Str path, ::rust::String *
 
 void lnav_rs_ext$cxxbridge1$205$source_languages(::rust::Vec<::rust::String> *return$) noexcept;
 
+void lnav_rs_ext$cxxbridge1$205$source_language_extensions(::rust::Vec<::lnav_rs_ext::SourceLanguageExtension> *return$) noexcept;
+
 void lnav_rs_ext$cxxbridge1$205$log_match_stats() noexcept;
 
 void lnav_rs_ext$cxxbridge1$205$start_ext_access(::std::uint16_t port, ::rust::String *api_key, ::lnav_rs_ext::StartExtResult *return$) noexcept;
@@ -1281,6 +1295,13 @@ void discover_srcs() noexcept {
 ::rust::Vec<::rust::String> source_languages() noexcept {
   ::rust::MaybeUninit<::rust::Vec<::rust::String>> return$;
   lnav_rs_ext$cxxbridge1$205$source_languages(&return$.value);
+  return ::std::move(return$.value);
+}
+
+// Every extension log2src parses, whether or not the source has files with it.
+::rust::Vec<::lnav_rs_ext::SourceLanguageExtension> source_language_extensions() noexcept {
+  ::rust::MaybeUninit<::rust::Vec<::lnav_rs_ext::SourceLanguageExtension>> return$;
+  lnav_rs_ext$cxxbridge1$205$source_language_extensions(&return$.value);
   return ::std::move(return$.value);
 }
 
@@ -1459,6 +1480,16 @@ void cxxbridge1$rust_vec$lnav_rs_ext$FindLogResult$drop(::rust::Vec<::lnav_rs_ex
 void cxxbridge1$rust_vec$lnav_rs_ext$FindLogResult$reserve_total(::rust::Vec<::lnav_rs_ext::FindLogResult> *ptr, ::std::size_t new_cap) noexcept;
 void cxxbridge1$rust_vec$lnav_rs_ext$FindLogResult$set_len(::rust::Vec<::lnav_rs_ext::FindLogResult> *ptr, ::std::size_t len) noexcept;
 void cxxbridge1$rust_vec$lnav_rs_ext$FindLogResult$truncate(::rust::Vec<::lnav_rs_ext::FindLogResult> *ptr, ::std::size_t len) noexcept;
+
+void cxxbridge1$rust_vec$lnav_rs_ext$SourceLanguageExtension$new(::rust::Vec<::lnav_rs_ext::SourceLanguageExtension> const *ptr) noexcept;
+void cxxbridge1$rust_vec$lnav_rs_ext$SourceLanguageExtension$drop(::rust::Vec<::lnav_rs_ext::SourceLanguageExtension> *ptr) noexcept;
+::std::size_t cxxbridge1$rust_vec$lnav_rs_ext$SourceLanguageExtension$len(::rust::Vec<::lnav_rs_ext::SourceLanguageExtension> const *ptr) noexcept;
+::std::size_t cxxbridge1$rust_vec$lnav_rs_ext$SourceLanguageExtension$capacity(::rust::Vec<::lnav_rs_ext::SourceLanguageExtension> const *ptr) noexcept;
+::lnav_rs_ext::SourceLanguageExtension const *cxxbridge1$rust_vec$lnav_rs_ext$SourceLanguageExtension$data_const(::rust::Vec<::lnav_rs_ext::SourceLanguageExtension> const *ptr) noexcept;
+::lnav_rs_ext::SourceLanguageExtension *cxxbridge1$rust_vec$lnav_rs_ext$SourceLanguageExtension$data_mut(::rust::Vec<::lnav_rs_ext::SourceLanguageExtension> *ptr) noexcept;
+void cxxbridge1$rust_vec$lnav_rs_ext$SourceLanguageExtension$reserve_total(::rust::Vec<::lnav_rs_ext::SourceLanguageExtension> *ptr, ::std::size_t new_cap) noexcept;
+void cxxbridge1$rust_vec$lnav_rs_ext$SourceLanguageExtension$set_len(::rust::Vec<::lnav_rs_ext::SourceLanguageExtension> *ptr, ::std::size_t len) noexcept;
+void cxxbridge1$rust_vec$lnav_rs_ext$SourceLanguageExtension$truncate(::rust::Vec<::lnav_rs_ext::SourceLanguageExtension> *ptr, ::std::size_t len) noexcept;
 } // extern "C"
 
 namespace rust {
@@ -1750,6 +1781,42 @@ void Vec<::lnav_rs_ext::FindLogResult>::set_len(::std::size_t len) noexcept {
 template <>
 void Vec<::lnav_rs_ext::FindLogResult>::truncate(::std::size_t len) {
   return cxxbridge1$rust_vec$lnav_rs_ext$FindLogResult$truncate(this, len);
+}
+template <>
+Vec<::lnav_rs_ext::SourceLanguageExtension>::Vec() noexcept {
+  cxxbridge1$rust_vec$lnav_rs_ext$SourceLanguageExtension$new(this);
+}
+template <>
+void Vec<::lnav_rs_ext::SourceLanguageExtension>::drop() noexcept {
+  return cxxbridge1$rust_vec$lnav_rs_ext$SourceLanguageExtension$drop(this);
+}
+template <>
+::std::size_t Vec<::lnav_rs_ext::SourceLanguageExtension>::size() const noexcept {
+  return cxxbridge1$rust_vec$lnav_rs_ext$SourceLanguageExtension$len(this);
+}
+template <>
+::std::size_t Vec<::lnav_rs_ext::SourceLanguageExtension>::capacity() const noexcept {
+  return cxxbridge1$rust_vec$lnav_rs_ext$SourceLanguageExtension$capacity(this);
+}
+template <>
+::lnav_rs_ext::SourceLanguageExtension const *Vec<::lnav_rs_ext::SourceLanguageExtension>::data() const noexcept {
+  return cxxbridge1$rust_vec$lnav_rs_ext$SourceLanguageExtension$data_const(this);
+}
+template <>
+::lnav_rs_ext::SourceLanguageExtension *Vec<::lnav_rs_ext::SourceLanguageExtension>::data() noexcept {
+  return cxxbridge1$rust_vec$lnav_rs_ext$SourceLanguageExtension$data_mut(this);
+}
+template <>
+void Vec<::lnav_rs_ext::SourceLanguageExtension>::reserve_total(::std::size_t new_cap) noexcept {
+  return cxxbridge1$rust_vec$lnav_rs_ext$SourceLanguageExtension$reserve_total(this, new_cap);
+}
+template <>
+void Vec<::lnav_rs_ext::SourceLanguageExtension>::set_len(::std::size_t len) noexcept {
+  return cxxbridge1$rust_vec$lnav_rs_ext$SourceLanguageExtension$set_len(this, len);
+}
+template <>
+void Vec<::lnav_rs_ext::SourceLanguageExtension>::truncate(::std::size_t len) {
+  return cxxbridge1$rust_vec$lnav_rs_ext$SourceLanguageExtension$truncate(this, len);
 }
 } // namespace cxxbridge1
 } // namespace rust

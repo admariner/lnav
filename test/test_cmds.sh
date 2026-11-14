@@ -9,6 +9,22 @@ run_cap_test ${lnav_test} -n \
     -c ":goto 0s" \
     ${test_dir}/logfile_access_log.0
 
+# :goto expands variables, so a script can go to a location it was given, like
+# a message's permalink from a caller that passes values as variables.  Rows 1
+# and 2 have the same time, so the link's hash picks row 2.
+run_cap_test env GOTO_TARGET="#msg00046f2b171e9640-v1:b05c1bdfe75cde41e151c89087e31951" \
+    ${lnav_test} -n \
+    -c ':goto $GOTO_TARGET' \
+    -c ";SELECT log_msg_line() AS focused" \
+    -c ':write-csv-to -' \
+    ${test_dir}/logfile_access_log.0
+
+run_cap_test env GOTO_TARGET=1 ${lnav_test} -n \
+    -c ':goto $GOTO_TARGET' \
+    -c ";SELECT log_msg_line() AS focused" \
+    -c ':write-csv-to -' \
+    ${test_dir}/logfile_access_log.0
+
 run_cap_test ${lnav_test} -nN \
     -c ":goto -1"
 

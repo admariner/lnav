@@ -1381,6 +1381,8 @@ For support questions, email:
   [4mline#|N%|timestamp|#anchor[0m   A line
                                number, percent into the file,
                                timestamp, or an anchor in a text file
+                               or a permalink to a log message.
+                               Variables are expanded, as in :echo
 [4mSee Also[0m
   [1m:focus-search[0m, [1m:next-location[0m, [1m:next-mark[0m, [1m:next-section[0m, 
   [1m:prev-location[0m, [1m:prev-mark[0m, [1m:prev-section[0m, [1m:relative-goto[0m
@@ -2613,7 +2615,7 @@ For support questions, email:
   [4mpath[0m   The path
 [4mSee Also[0m
   [1mdirname()[0m, [1mjoinpath()[0m, [1mpath_match()[0m, [1mreadlink()[0m, [1mrealpath()[0m, 
-  [1msource_find_file()[0m
+  [1msource_find_file()[0m, [1msource_languages()[0m
 [4mExamples[0m
 #1 To get the base of a plain file name:
    [37m[40m;[0m[1m[36m[40mSELECT[0m[37m[40m [0m[1m[37m[40mbasename[0m[37m[40m([0m[35m[40m'foobar'[0m[37m[40m)                         [0m
@@ -2911,7 +2913,7 @@ For support questions, email:
   [4mpath[0m   The path
 [4mSee Also[0m
   [1mbasename()[0m, [1mjoinpath()[0m, [1mpath_match()[0m, [1mreadlink()[0m, [1mrealpath()[0m, 
-  [1msource_find_file()[0m
+  [1msource_find_file()[0m, [1msource_languages()[0m
 [4mExamples[0m
 #1 To get the directory of a relative file path:
    [37m[40m;[0m[1m[36m[40mSELECT[0m[37m[40m [0m[1m[37m[40mdirname[0m[37m[40m([0m[35m[40m'foo/bar'[0m[37m[40m)                         [0m
@@ -3471,7 +3473,7 @@ For support questions, email:
          be ignored.
 [4mSee Also[0m
   [1mbasename()[0m, [1mdirname()[0m, [1mpath_match()[0m, [1mreadlink()[0m, [1mrealpath()[0m, 
-  [1msource_find_file()[0m
+  [1msource_find_file()[0m, [1msource_languages()[0m
 [4mExamples[0m
 #1 To join a directory and file name into a relative path:
    [37m[40m;[0m[1m[36m[40mSELECT[0m[37m[40m [0m[1m[37m[40mjoinpath[0m[37m[40m([0m[35m[40m'foo'[0m[37m[40m, [0m[35m[40m'bar'[0m[37m[40m)                     [0m
@@ -4723,7 +4725,7 @@ For support questions, email:
   [4mpath[0m      The path to match
 [4mSee Also[0m
   [1mbasename()[0m, [1mdirname()[0m, [1mjoinpath()[0m, [1mreadlink()[0m, [1mrealpath()[0m, 
-  [1msource_find_file()[0m
+  [1msource_find_file()[0m, [1msource_languages()[0m
 [4mExamples[0m
 #1 To test if a path is anywhere under /var/log:
    [37m[40m;[0m[1m[36m[40mSELECT[0m[37m[40m [0m[1m[37m[40mpath_match[0m[37m[40m([0m[35m[40m'/var/log/**/*.log'[0m[37m[40m, [0m[35m[40m'/var/log/nginx/access.log'[0m[37m[40m)[0m
@@ -4962,7 +4964,7 @@ For support questions, email:
   [4mpath[0m   The path to the symbolic link.
 [4mSee Also[0m
   [1mbasename()[0m, [1mdirname()[0m, [1mjoinpath()[0m, [1mpath_match()[0m, [1mrealpath()[0m, 
-  [1msource_find_file()[0m
+  [1msource_find_file()[0m, [1msource_languages()[0m
 
 [1;4mrealpath[0m[4m([0m[4mpath[0m[4m)[0m
 ══════════════════════════════════════════════════════════════════════
@@ -4972,7 +4974,7 @@ For support questions, email:
   [4mpath[0m   The path to resolve.
 [4mSee Also[0m
   [1mbasename()[0m, [1mdirname()[0m, [1mjoinpath()[0m, [1mpath_match()[0m, [1mreadlink()[0m, 
-  [1msource_find_file()[0m
+  [1msource_find_file()[0m, [1msource_languages()[0m
 
 [1;4mregexp[0m[4m([0m[4mre[0m[4m, [0m[4mstr[0m[4m)[0m
 ══════════════════════════════════════════════════════════════════════
@@ -5366,7 +5368,24 @@ For support questions, email:
   [4mpath[0m   The path to find.
 [4mSee Also[0m
   [1mbasename()[0m, [1mdirname()[0m, [1mjoinpath()[0m, [1mpath_match()[0m, [1mreadlink()[0m, 
-  [1mrealpath()[0m
+  [1mrealpath()[0m, [1msource_languages()[0m
+
+[1;4msource_languages[0m[4m()[0m
+══════════════════════════════════════════════════════════════════════
+  Returns a JSON object of the programming languages whose source
+  files :add-source-path can map log messages to, each an LSP language
+  identifier, like 'java' or 'cpp', and the extensions of its files
+  (without the dot, matched case-sensitively).  The languages are the
+  ones that can be parsed, whether or not the source paths have files
+  in them.
+[4mSee Also[0m
+  [1mbasename()[0m, [1mdirname()[0m, [1mjoinpath()[0m, [1mpath_match()[0m, [1mreadlink()[0m, 
+  [1mrealpath()[0m, [1msource_find_file()[0m
+[4mExample[0m
+#1 To get the extensions of Kotlin source files:
+   [37m[40m;[0m[1m[36m[40mSELECT[0m[37m[40m [0m[1m[37m[40msource_languages[0m[37m[40m() [0m[1m[37m[40m->[0m[37m[40m [0m[35m[40m'$.kotlin'[0m[37m[40m           [0m
+   ["kt","kts"]
+
 
 [1;4msource_log_stmt[0m[4m([0m[4mpath[0m[4m)[0m
 ══════════════════════════════════════════════════════════════════════

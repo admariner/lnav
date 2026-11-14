@@ -572,6 +572,7 @@ logfile::reset_internal_state_for_reindex()
 {
     log_debug("resetting internal state for reindex");
     this->lf_index.clear();
+    this->lf_line_number_memo = {};
     this->lf_stmt_ids.clear();
     this->lf_line_ids.clear();
     this->reset_time_order();
@@ -599,6 +600,8 @@ size_t
 logfile::discard_index_before(size_t index)
 {
     require(this->lf_options.loo_streaming);
+
+    this->lf_line_number_memo = {};
 
     if (this->lf_index.size() <= RETRY_MATCH_SIZE) {
         return 0;
@@ -2115,6 +2118,8 @@ logfile::rebuild_index(std::optional<ui_clock::time_point> deadline)
     static auto op = lnav_operation{"rebuild_file_index"};
     auto op_guard = lnav_opid_guard::internal(op);
 
+    // Indexing can pop lines and push others in their place.
+    this->lf_line_number_memo = {};
     this->lf_time_rollovers.clear();
 
     if (!this->lf_invalidated_opids.empty()) {
@@ -3179,17 +3184,36 @@ logfile::read_range(const file_range& fr)
 size_t
 logfile::get_line_number(const_iterator ll) const
 {
-    size_t retval = 1;
+    const auto index = (size_t) std::distance(this->begin(), ll);
 
-    if (this->lf_format != nullptr && this->lf_format->lf_formatted_lines) {
-        for (auto iter = this->begin(); iter != ll; ++iter) {
-            if (!iter->is_sub_line()) {
+    if (this->lf_format == nullptr || !this->lf_format->lf_formatted_lines) {
+        return index + 1;
+    }
+
+    // Counting from the last answer makes a scan in either direction cost a
+    // step per line instead of a walk from the start.
+    auto memo = this->lf_line_number_memo;
+    if (memo.lnm_index > this->lf_index.size()
+        || index < memo.lnm_index - index)
+    {
+        memo = {};
+    }
+
+    auto retval = memo.lnm_line_number;
+    if (index >= memo.lnm_index) {
+        for (auto lpc = memo.lnm_index; lpc < index; ++lpc) {
+            if (!this->lf_index[lpc].is_sub_line()) {
                 retval += 1;
             }
         }
     } else {
-        retval += std::distance(this->begin(), ll);
+        for (auto lpc = index; lpc < memo.lnm_index; ++lpc) {
+            if (!this->lf_index[lpc].is_sub_line()) {
+                retval -= 1;
+            }
+        }
     }
+    this->lf_line_number_memo = {index, retval};
 
     return retval;
 }
@@ -3212,7 +3236,9 @@ logfile::read_full_message(const_iterator ll,
     auto range_for_line
         = file_range{ll->get_offset(), mlr.mlr_length, mlr.mlr_metadata};
     try {
-        if (range_for_line.fr_size > line_buffer::MAX_LINE_BUFFER_SIZE) {
+        const auto truncated
+            = range_for_line.fr_size > line_buffer::MAX_LINE_BUFFER_SIZE;
+        if (truncated) {
             range_for_line.fr_size = line_buffer::MAX_LINE_BUFFER_SIZE;
         }
         if (format == read_format_t::plain && mlr.mlr_line_count > 1
@@ -3250,6 +3276,11 @@ logfile::read_full_message(const_iterator ll,
             msg_out.share(this->lf_plain_msg_shared,
                           this->lf_plain_msg_buffer.data(),
                           this->lf_plain_msg_buffer.size());
+            // The lines' metadata, as the single read below gets: share()
+            // leaves the defaults disown() set (valid UTF-8, no ANSI), so
+            // erase_ansi() skipped these messages and invalid UTF-8 was
+            // taken as valid.  The '\n's joining the lines change neither.
+            msg_out.get_metadata() = range_for_line.fr_metadata;
         } else {
             auto read_result
                 = this->lf_line_buffer.read_range(range_for_line, dir);
@@ -3266,6 +3297,16 @@ logfile::read_full_message(const_iterator ll,
             }
             msg_out = read_result.unwrap();
             msg_out.get_metadata() = range_for_line.fr_metadata;
+            if (truncated && msg_out.get_metadata().m_valid_utf) {
+                // The cut can fall inside a character, and the lines'
+                // metadata says the bytes are valid UTF-8, which the readers
+                // trust (erase_ansi(), PCRE without its own check).  So the
+                // message ends at the last whole character instead.
+                msg_out.narrow(0,
+                               msg_out.to_string_fragment()
+                                   .without_partial_codepoint()
+                                   .length());
+            }
         }
         if (this->lf_format.get() != nullptr) {
             this->lf_format->get_subline(
@@ -3496,6 +3537,13 @@ logfile::read_raw_message(const_iterator ll)
             return Err(read_res.unwrapErr());
         }
         auto sbr = read_res.unwrap();
+
+        if (this->lf_plain_msg_buffer.size() + sbr.length()
+            > line_buffer::MAX_LINE_BUFFER_SIZE)
+        {
+            break;
+        }
+
         this->lf_plain_msg_buffer.append(sbr.to_string_view());
         ++curr_ll;
         if (curr_ll != ending_ll) {

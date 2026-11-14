@@ -178,6 +178,9 @@ listview_curses::get_dimensions(vis_line_t& height_out,
     } else {
         width_out = 0;
     }
+    if (this->vc_width > 0) {
+        width_out = std::min((unsigned long) this->vc_width, width_out);
+    }
 }
 
 void
@@ -554,9 +557,6 @@ listview_curses::do_update()
         auto role_attrs = vc.attrs_for_role(this->vc_default_role);
 
         retval = true;
-        if (this->vc_width > 0) {
-            width = std::min((unsigned long) this->vc_width, width);
-        }
 
         wrap_width = width;
         if (this->lv_show_scrollbar && wrap_width > 0) {
@@ -653,8 +653,8 @@ listview_curses::do_update()
                     }
                     write_res = mvwattrline(
                         this->vc_window, y, x, al, lr, this->vc_default_role);
-                    lr.lr_start = write_res.mr_chars_out;
-                    lr.lr_end = write_res.mr_chars_out + width - 1;
+                    lr.lr_start += write_res.mr_chars_out;
+                    lr.lr_end = lr.lr_start + width - 1;
                     wrapped_line += 1;
                     ++y;
                 } while (this->lv_word_wrap && y < bottom

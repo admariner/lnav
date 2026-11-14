@@ -40,6 +40,11 @@
                     "BatchMode": "yes",
                     "ConnectTimeout": "10"
                 }
+            },
+            "kubectl": {
+                "command": "kubectl",
+                "flags": "",
+                "start-command": "exec sh -c ./{0:}"
             }
         },
         "clipboard": {

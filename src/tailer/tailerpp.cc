@@ -30,6 +30,7 @@
 #include "tailerpp.hh"
 
 #include <unistd.h>
+#include <zlib.h>
 
 namespace tailer {
 
@@ -60,6 +61,86 @@ readall(int sock, void* buf, size_t len)
     }
 
     return 0;
+}
+
+Result<void, std::string>
+read_bits(int fd, std::vector<uint8_t>& bits)
+{
+    tailer_packet_payload_type_t payload_type;
+
+    if (readall(fd, &payload_type, sizeof(payload_type)) == -1) {
+        return Err(fmt::format(FMT_STRING("unable to read payload type: {}"),
+                               strerror(errno)));
+    }
+
+    switch (payload_type) {
+        case TPPT_BITS: {
+            int32_t length;
+
+            if (readall(fd, &length, sizeof(length)) == -1) {
+                return Err(fmt::format(
+                    FMT_STRING("unable to read content length: {}"),
+                    strerror(errno)));
+            }
+            if (length < 0 || length > MAX_PAYLOAD_LENGTH) {
+                return Err(fmt::format(FMT_STRING("invalid content length: {}"),
+                                       length));
+            }
+            bits.resize(length);
+            if (readall(fd, bits.data(), length) == -1) {
+                return Err(
+                    fmt::format(FMT_STRING("unable to read content -- {}"),
+                                strerror(errno)));
+            }
+            return Ok();
+        }
+        case TPPT_DEFLATED_BITS: {
+            int32_t lengths[2];
+
+            if (readall(fd, lengths, sizeof(lengths)) == -1) {
+                return Err(fmt::format(
+                    FMT_STRING("unable to read content lengths: {}"),
+                    strerror(errno)));
+            }
+
+            const auto length = lengths[0];
+            const auto deflated_length = lengths[1];
+            if (length < 0 || length > MAX_PAYLOAD_LENGTH
+                || deflated_length < 0 || deflated_length > MAX_PAYLOAD_LENGTH)
+            {
+                return Err(
+                    fmt::format(FMT_STRING("invalid content lengths: {}/{}"),
+                                length,
+                                deflated_length));
+            }
+
+            std::vector<uint8_t> deflated(deflated_length);
+            if (readall(fd, deflated.data(), deflated_length) == -1) {
+                return Err(
+                    fmt::format(FMT_STRING("unable to read content -- {}"),
+                                strerror(errno)));
+            }
+
+            bits.resize(length);
+            uLongf dest_len = length;
+            auto rc = uncompress(
+                bits.data(), &dest_len, deflated.data(), deflated_length);
+            if (rc != Z_OK || dest_len != (uLongf) length) {
+                return Err(fmt::format(
+                    FMT_STRING("unable to decompress content: rc={}; "
+                               "length={}; expected={}"),
+                    rc,
+                    dest_len,
+                    length));
+            }
+            return Ok();
+        }
+        default:
+            return Err(fmt::format(
+                FMT_STRING("payload-type mismatch, got: {}; expected: {}"),
+                (int) payload_type,
+                (int) TPPT_BITS));
+    }
 }
 
 Result<packet, std::string>

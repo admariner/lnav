@@ -4892,9 +4892,13 @@ logfile_sub_source::row_for_anchor(const std::string& id)
                 auto low_vl = this->row_for_time(to_timeval(ts_low));
                 auto high_vl = this->row_for_time(to_timeval(ts_high));
                 if (low_vl) {
-                    auto lw = this->window_at(
-                        low_vl.value(),
-                        high_vl.value_or(low_vl.value() + 1_vl));
+                    // Every row at the link's time: up to the first later
+                    // one, or the end when none is later.  Stopping after
+                    // one row missed a message that shares its time with
+                    // the last rows of the log.
+                    auto lw = high_vl
+                        ? this->window_at(low_vl.value(), high_vl.value())
+                        : this->window_to_end(low_vl.value());
 
                     for (const auto& li : *lw) {
                         auto hash_res = li.get_line_hash();

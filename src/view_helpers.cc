@@ -725,7 +725,6 @@ handle_winch(screen_curses* sc)
 void
 layout_views()
 {
-    static constexpr auto FILES_FOCUSED_WIDTH = 48U;
     static constexpr auto FILES_BLURRED_WIDTH = 20U;
 
     static auto* breadcrumb_view = injector::get<breadcrumb_curses*>();
@@ -809,7 +808,7 @@ layout_views()
                        || lnav_data.ld_mode == ln_mode_t::FILE_DETAILS
                        || lnav_data.ld_mode == ln_mode_t::SEARCH_FILES);
     auto files_width = lnav_data.ld_mode == ln_mode_t::FILES
-        ? FILES_FOCUSED_WIDTH
+        ? files_sub_source::FOCUSED_WIDTH
         : FILES_BLURRED_WIDTH;
     int filter_height;
 

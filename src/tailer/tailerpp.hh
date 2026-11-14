@@ -282,12 +282,17 @@ Result<void, std::string> read_payloads_into(int fd,
                                              std::string& str,
                                              Ts&... args);
 
+/**
+ * Read a TPPT_BITS or TPPT_DEFLATED_BITS payload into the given vector,
+ * decompressing it if needed.
+ */
+Result<void, std::string> read_bits(int fd, std::vector<uint8_t>& bits);
+
 template<typename... Ts>
 Result<void, std::string>
 read_payloads_into(int fd, std::vector<uint8_t>& bits, Ts&... args)
 {
-    TRY(TRY(TRY(protocol_recv<TPPT_BITS>::create(fd)).read_length(bits))
-            .read_content(bits));
+    TRY(read_bits(fd, bits));
 
     return read_payloads_into(fd, args...);
 }

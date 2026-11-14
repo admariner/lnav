@@ -538,6 +538,7 @@ public:
     static void awaiting_user_input();
 
     struct mvwattrline_result {
+        /** The number of characters written from the given range. */
         size_t mr_chars_out{0};
         size_t mr_bytes_remaining{0};
         string_fragment mr_selected_text;

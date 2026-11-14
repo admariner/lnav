@@ -107,6 +107,8 @@ private:
     private:
         static std::filesystem::path tmp_path();
 
+        Result<void, std::string> bootstrap();
+
         std::string get_display_path(const std::string& remote_path) const;
 
         struct connected {
@@ -147,6 +149,12 @@ private:
             std::chrono::steady_clock::now()};
         std::map<std::string, logfile_open_options_base> rpq_new_paths;
         std::map<std::string, logfile_open_options_base> rpq_existing_paths;
+
+        /**
+         * Whether any of the paths are not being followed, in which case a
+         * failed connection is not retried.
+         */
+        bool has_unfollowed_paths() const;
 
         void send_synced_to_main(const std::string& netloc);
     };

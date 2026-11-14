@@ -116,3 +116,87 @@ TEST_CASE("humanize::network::path")
         CHECK(rp.p_path == ".");
     }
 }
+
+TEST_CASE("humanize::network::path container")
+{
+    {
+        auto rp_opt = humanize::network::path::from_str(
+            string_fragment::from_const(
+                "tstack-jetty11-2/snaplogic-groundplex-jcc-7d6495d5d5-q8ktf:"
+                "/opt/snaplogic/run/log/jcc.json"));
+        REQUIRE(rp_opt.has_value());
+
+        auto rp = *rp_opt;
+        CHECK(rp.p_locality.l_transport == network::transport_t::kubectl);
+        CHECK(rp.p_locality.l_namespace.value() == "tstack-jetty11-2");
+        CHECK(rp.p_locality.l_hostname
+              == "snaplogic-groundplex-jcc-7d6495d5d5-q8ktf");
+        CHECK(!rp.p_locality.l_container.has_value());
+        CHECK(!rp.p_locality.l_username.has_value());
+        CHECK(rp.p_path == "/opt/snaplogic/run/log/jcc.json");
+        CHECK(fmt::to_string(rp.p_locality)
+              == "tstack-jetty11-2/snaplogic-groundplex-jcc-7d6495d5d5-q8ktf");
+    }
+
+    {
+        auto rp_opt = humanize::network::path::from_str(
+            string_fragment::from_const("default/web.v1/nginx:/var/log"));
+        REQUIRE(rp_opt.has_value());
+
+        auto rp = *rp_opt;
+        CHECK(rp.p_locality.l_transport == network::transport_t::kubectl);
+        CHECK(rp.p_locality.l_namespace.value() == "default");
+        CHECK(rp.p_locality.l_hostname == "web.v1");
+        CHECK(rp.p_locality.l_container.value() == "nginx");
+        CHECK(rp.p_path == "/var/log");
+        CHECK(fmt::to_string(rp) == "default/web.v1/nginx:/var/log");
+
+        auto home_str = fmt::to_string(rp.home());
+        CHECK(home_str == "default/web.v1/nginx:");
+        auto home_opt
+            = humanize::network::path::from_str(string_fragment::from_str(home_str));
+        REQUIRE(home_opt.has_value());
+        CHECK(fmt::to_string(home_opt->p_locality) == "default/web.v1/nginx");
+        CHECK(home_opt->p_path == ".");
+    }
+
+    {
+        auto rp_opt = humanize::network::path::from_str(
+            string_fragment::from_const("default/web:"));
+        REQUIRE(rp_opt.has_value());
+        CHECK(rp_opt->p_path == ".");
+    }
+
+    {
+        auto rp_opt = humanize::network::path::from_str(
+            string_fragment::from_const("host1.example.com:/var/log"));
+        REQUIRE(rp_opt.has_value());
+        CHECK(rp_opt->p_locality.l_transport == network::transport_t::ssh);
+    }
+
+    for (const auto* str : {
+             "Logs/foo:bar",
+             "./a/b:c",
+             "a/b/c/d:x",
+             "/abs/pod:x",
+             "ns/-pod:x",
+             "ns/pod-:x",
+             "ns/pod/c.d:x",
+             "dean@ns/pod:x",
+         })
+    {
+        INFO(str);
+        CHECK(!humanize::network::path::from_str(
+                   string_fragment::from_c_str(str))
+                   .has_value());
+    }
+
+    {
+        auto long_ns = std::string(64, 'a') + "/pod:/x";
+        CHECK(!humanize::network::path::from_str(string_fragment::from_str(long_ns))
+                   .has_value());
+        auto ok_ns = std::string(63, 'a') + "/pod:/x";
+        CHECK(humanize::network::path::from_str(string_fragment::from_str(ok_ns))
+                  .has_value());
+    }
+}

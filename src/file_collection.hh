@@ -32,6 +32,8 @@
 #ifndef lnav_file_collection_hh
 #define lnav_file_collection_hh
 
+#include <chrono>
+#include <deque>
 #include <forward_list>
 #include <functional>
 #include <future>
@@ -61,9 +63,47 @@ struct tailer_progress {
     std::string tp_message;
 };
 
+/**
+ * The state of the connection to a remote host or container, kept for the
+ * details panel in the "Files" view.
+ */
+struct remote_status {
+    struct log_entry {
+        std::chrono::system_clock::time_point le_time;
+        lnav::console::user_message le_message;
+    };
+
+    static constexpr size_t MAX_LOG_ENTRIES = 50;
+
+    std::string rs_state{"Initializing"};
+    lnav::console::user_message::level rs_state_level{
+        lnav::console::user_message::level::info};
+    /** True once the tailer has announced itself. */
+    bool rs_connected{false};
+    std::string rs_uname;
+    std::deque<log_entry> rs_log;
+
+    void add_log(lnav::console::user_message um)
+    {
+        if (this->rs_log.size() >= MAX_LOG_ENTRIES) {
+            this->rs_log.pop_front();
+        }
+        this->rs_log.emplace_back(log_entry{
+            std::chrono::system_clock::now(),
+            std::move(um),
+        });
+    }
+};
+
 struct scan_progress {
     std::list<archive_manager::extract_progress> sp_extractions;
     std::map<std::string, tailer_progress> sp_tailers;
+    /**
+     * The status of each remote, by netloc.  Entries outlive the connection
+     * so the details are still available after a failure or once a remote
+     * has been synced.  Not counted by empty() since it is not progress.
+     */
+    std::map<std::string, remote_status> sp_remotes;
 
     bool empty() const
     {

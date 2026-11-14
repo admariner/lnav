@@ -454,6 +454,9 @@ view_curses::mvwattrline(ncplane* window,
     if (retval.mr_chars_out == 0) {
         retval.mr_chars_out = char_index;
     }
+    retval.mr_chars_out = retval.mr_chars_out > (size_t) lr_chars.lr_start
+        ? retval.mr_chars_out - lr_chars.lr_start
+        : size_t{0};
     retval.mr_bytes_remaining = expanded_line.size() - lr_bytes.lr_end;
     expanded_line.resize(lr_bytes.lr_end);
 
@@ -469,12 +472,17 @@ view_curses::mvwattrline(ncplane* window,
             // right place
             ncplane_cursor_move_yx(window, y, x);
         }
-        nccell clear_cell;
-        nccell_init(&clear_cell);
-        nccell_prime(
-            window, &clear_cell, " ", 0, view_colors::to_channels(base_attrs));
-        ncplane_hline(
-            window, &clear_cell, lr_chars.length() - retval.mr_chars_out);
+        if (retval.mr_chars_out < (size_t) lr_chars.length()) {
+            nccell clear_cell;
+            nccell_init(&clear_cell);
+            nccell_prime(window,
+                         &clear_cell,
+                         " ",
+                         0,
+                         view_colors::to_channels(base_attrs));
+            ncplane_hline(
+                window, &clear_cell, lr_chars.length() - retval.mr_chars_out);
+        }
     }
 
     text_attrs resolved_line_attrs[line_width_chars + 1];

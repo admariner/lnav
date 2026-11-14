@@ -546,6 +546,14 @@ public:
     logline_value_vector jlf_line_values;
 
     off_t jlf_cached_offset{-1};
+    /**
+     * Whether the input the cached rendering was made from was valid UTF-8:
+     * all of the message's lines, as read, not just its first.  The
+     * rendering keeps valid UTF-8 valid (escapes decode to valid characters,
+     * overflow cuts on character boundaries, transforms touch only ASCII), so
+     * this is what its buffers say.
+     */
+    bool jlf_cached_valid_utf{true};
     line_range jlf_cached_sub_range;
     subline_options jlf_cached_opts{};
     std::vector<off_t> jlf_line_offsets;

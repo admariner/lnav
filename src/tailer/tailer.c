@@ -39,6 +39,43 @@
 #include "sha-256.h"
 #include "tailer.h"
 
+#define SDEFL_IMPLEMENTATION
+#include "sdefl.h"
+
+/* Payloads smaller than this are not worth compressing. */
+#define MIN_DEFLATE_LENGTH (4 * 1024)
+#define DEFLATE_LEVEL 1
+#define MAX_DEFLATE_INPUT (4 * 1024 * 1024)
+
+static struct sdefl DEFLATE_STATE;
+static unsigned char DEFLATE_BUFFER[MAX_DEFLATE_INPUT + 64 * 1024];
+
+static void send_bits(int fd, int32_t length, const char *bits)
+{
+    if (length >= MIN_DEFLATE_LENGTH && length <= MAX_DEFLATE_INPUT
+        && sdefl_bound(length) <= (int) sizeof(DEFLATE_BUFFER))
+    {
+        int32_t deflated_length = zsdeflate(
+            &DEFLATE_STATE, DEFLATE_BUFFER, bits, length, DEFLATE_LEVEL);
+
+        if (deflated_length > 0 && deflated_length < length) {
+            tailer_packet_payload_type_t payload_type = TPPT_DEFLATED_BITS;
+
+            write(fd, &payload_type, sizeof(payload_type));
+            write(fd, &length, sizeof(length));
+            write(fd, &deflated_length, sizeof(deflated_length));
+            write(fd, DEFLATE_BUFFER, deflated_length);
+            return;
+        }
+    }
+
+    tailer_packet_payload_type_t payload_type = TPPT_BITS;
+
+    write(fd, &payload_type, sizeof(payload_type));
+    write(fd, &length, sizeof(length));
+    write(fd, bits, length);
+}
+
 ssize_t send_packet(int fd,
                     tailer_packet_type_t tpt,
                     tailer_packet_payload_type_t payload_type,
@@ -50,7 +87,9 @@ ssize_t send_packet(int fd,
     va_start(args, payload_type);
     write(fd, &tpt, sizeof(tpt));
     do {
-        write(fd, &payload_type, sizeof(payload_type));
+        if (payload_type != TPPT_BITS) {
+            write(fd, &payload_type, sizeof(payload_type));
+        }
         switch (payload_type) {
             case TPPT_STRING: {
                 char *str = va_arg(args, char *);
@@ -76,8 +115,7 @@ ssize_t send_packet(int fd,
                 int32_t length = va_arg(args, int32_t);
                 const char *bits = va_arg(args, const char *);
 
-                write(fd, &length, sizeof(length));
-                write(fd, bits, length);
+                send_bits(fd, length, bits);
                 break;
             }
             case TPPT_DONE: {

@@ -94,6 +94,7 @@ public:
     std::optional<log_level_t> lst_log_level;
     mutable std::vector<logline_value_meta> lst_column_metas;
     int64_t lst_match_index{-1};
+    vis_line_t lst_match_line{-1};
     mutable std::vector<vtab_column> lst_cols;
     string_attrs_t lst_attrs_cache;
     logline_value_vector lst_line_values_cache;

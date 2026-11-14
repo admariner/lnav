@@ -170,7 +170,7 @@
                                 },
                                 "transfer-command": {
                                     "title": "/tuning/remote/ssh/transfer-command",
-                                    "description": "Command executed on the remote host when transferring the file",
+                                    "description": "Unused, the tailer is transferred by a built-in script",
                                     "type": "string"
                                 },
                                 "start-command": {
@@ -208,6 +208,29 @@
                                         }
                                     },
                                     "additionalProperties": false
+                                }
+                            },
+                            "additionalProperties": false
+                        },
+                        "kubectl": {
+                            "description": "Settings related to the kubectl command used to access files in Kubernetes containers",
+                            "title": "/tuning/remote/kubectl",
+                            "type": "object",
+                            "properties": {
+                                "command": {
+                                    "title": "/tuning/remote/kubectl/command",
+                                    "description": "The kubectl command to execute",
+                                    "type": "string"
+                                },
+                                "flags": {
+                                    "title": "/tuning/remote/kubectl/flags",
+                                    "description": "Extra whitespace-separated arguments to pass to the kubectl command",
+                                    "type": "string"
+                                },
+                                "start-command": {
+                                    "title": "/tuning/remote/kubectl/start-command",
+                                    "description": "Command executed in the container to start the tailer",
+                                    "type": "string"
                                 }
                             },
                             "additionalProperties": false

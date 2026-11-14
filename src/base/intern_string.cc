@@ -29,6 +29,7 @@
  * @file intern_string.cc
  */
 
+#include <limits>
 #include <mutex>
 #include <new>
 
@@ -115,7 +116,6 @@ intern_string::destroy(intern_string* is)
 const intern_string*
 intern_string::lookup(const char* str, ssize_t len) noexcept
 {
-    unsigned long h;
     intern_string* curr;
 
     if (len == -1) {
@@ -127,32 +127,6 @@ intern_string::lookup(const char* str, ssize_t len) noexcept
          */
         return nullptr;
     }
-#if 0
-    h = hash_str(str, len) & (TABLE_SIZE - 1);
-
-    {
-        static std::mutex table_mutex;
-
-        std::lock_guard<std::mutex> lk(table_mutex);
-        auto tab = get_table_lifetime();
-
-        curr = tab->it_table[h];
-        while (curr != nullptr) {
-            if (static_cast<ssize_t>(curr->is_len) == len
-                && memcmp(curr->is_data, str, len) == 0)
-            {
-                return curr;
-            }
-            curr = curr->is_next;
-        }
-
-        curr = intern_string::create(str, len);
-        curr->is_next = tab->it_table[h];
-        tab->it_table[h] = curr;
-
-        return curr;
-    }
-#else
     auto sf = string_fragment::from_bytes(str, len);
 
     auto& it_para_map = get_table_lifetime()->it_para_map;
@@ -166,7 +140,6 @@ intern_string::lookup(const char* str, ssize_t len) noexcept
     auto [inserted_iter, _inserted] = it_para_map.try_emplace(sf, curr);
 
     return inserted_iter->second;
-#endif
 }
 
 const intern_string*
@@ -505,6 +478,26 @@ string_fragment::start_of_codepoint(size_t byte_index) const
     }
 
     return byte_index;
+}
+
+string_fragment
+string_fragment::without_partial_codepoint() const
+{
+    if (this->empty()) {
+        return *this;
+    }
+
+    const auto last = this->start_of_codepoint(this->length() - 1);
+    // The length the lead byte says, with nothing left out of it.
+    const auto size_res = ww898::utf::utf8::char_size([this, last]() {
+        return std::make_pair((uint8_t) this->data()[last],
+                              std::numeric_limits<size_t>::max());
+    });
+    if (size_res.isOk() && last + size_res.unwrap() > (size_t) this->length())
+    {
+        return this->sub_range(0, last);
+    }
+    return *this;
 }
 
 string_fragment

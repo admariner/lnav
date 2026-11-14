@@ -17,10 +17,12 @@ noinst_LIBRARIES = libpcrepp.a
 
 noinst_HEADERS = \
 	pcre2pp.hh \
-	pcre2pp_fwd.hh
+	pcre2pp_fwd.hh \
+	wildcards.hh
 
 libpcrepp_a_SOURCES = \
-	pcre2pp.cc
+	pcre2pp.cc \
+	wildcards.cc
 
 test_pcre2pp_SOURCES = test_pcre2pp.cc
 test_pcre2pp_LDADD = \

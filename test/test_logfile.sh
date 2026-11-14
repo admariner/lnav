@@ -900,6 +900,22 @@ export HOME="${saved_home}"
 cat ${test_dir}/logfile_generic.0 | run_cap_test ${lnav_test} -n \
     -c ':test-comment generic before piper'
 
+# A multi-line message from a piper is put together from its lines, and its
+# ANSI escapes have to come out of log_text like a single-line one's.  stdin
+# has to be a pipe for lnav to read it through a piper (a file is opened as a
+# plain log), and run_cap_test can't be on the end of a pipeline: there it
+# runs in a subshell, where a failed comparison doesn't fail the script.  So
+# the input goes through a named pipe.
+rm -f piper_ansi_multiline.fifo
+mkfifo piper_ansi_multiline.fifo
+printf 'Nov 12 10:00:00 host app[1]: first \033[31mred\033[0m\n  continued \033[32mgreen\033[0m\nNov 12 10:00:01 host app[1]: single \033[34mblue\033[0m\n' \
+    > piper_ansi_multiline.fifo &
+run_cap_test env TEST_COMMENT="piper multi-line message ansi" \
+    ${lnav_test} -n \
+    -c ";SELECT log_line, instr(log_text, char(27)) > 0 AS has_escape, log_text FROM all_logs" \
+    -c ':write-csv-to -' < piper_ansi_multiline.fifo
+rm -f piper_ansi_multiline.fifo
+
 run_cap_test ${lnav_test} -n ${test_dir}/logfile_logfmt.0
 
 run_cap_test ${lnav_test} -n ${test_dir}/logfile_laravel.0

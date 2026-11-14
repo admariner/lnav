@@ -48,6 +48,8 @@ class files_sub_source
     : public text_sub_source
     , public text_delegate {
 public:
+    static constexpr auto FOCUSED_WIDTH = 48U;
+
     bool empty() const override { return false; }
 
     bool list_input_handle_key(listview_curses& lv, const ncinput& ch) override;
@@ -94,6 +96,16 @@ public:
         return nullptr;
     }
 
+    /**
+     * Called on the main thread when the status of a remote changes so the
+     * details can be refreshed if that remote is selected.
+     */
+    void remote_status_changed(const std::string& netloc);
+
+    /** Add the connection status and log for a remote path. */
+    void append_remote_details(const std::string& path,
+                               std::vector<attr_line_t>& details);
+
     bool is_index_pass_in_flight() const
     {
         return !this->fss_index_progress.empty();
@@ -113,6 +125,8 @@ public:
     std::vector<index_progress_report> fss_index_progress;
     /** Set when a selection change was skipped because a pass was running. */
     bool fss_details_stale{false};
+    /** The netloc of the remote whose status is shown in the details. */
+    std::optional<std::string> fss_details_netloc;
 };
 
 struct files_overlay_source : list_overlay_source {

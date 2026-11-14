@@ -31,6 +31,8 @@
 #define lnav_tailer_looper_cfg_hh
 
 #include <chrono>
+#include <map>
+#include <string>
 
 namespace tailer {
 
@@ -46,6 +48,9 @@ struct config {
         {"BatchMode", "yes"},
         {"ConnectTimeout", "10"},
     };
+    std::string c_kubectl_cmd{"kubectl"};
+    std::string c_kubectl_flags{};
+    std::string c_kubectl_start_cmd{"exec sh -c ./{0:}"};
 };
 
 }  // namespace tailer

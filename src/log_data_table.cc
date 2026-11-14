@@ -49,6 +49,16 @@ log_data_table::log_data_table(logfile_sub_source& lss,
     this->vi_supports_indexes = false;
     this->ldt_format_impl = lvm.lookup_impl(format->get_name());
     this->get_columns_int();
+}
+
+void
+log_data_table::filter(log_cursor& lc, logfile_sub_source& lss)
+{
+    // Started by a query of the table, not by making it: the table is
+    // made for the focused message before every SQL statement (the TUI's
+    // `p` key runs one), and the map is a background scan of every message.
+    // Until it reaches a line, ldt_check_schema() can't rule the line out,
+    // so next() parses it.
     if (ldt_start_map != nullptr) {
         ldt_start_map();
     }

@@ -844,7 +844,7 @@ basename(*path*)
       bar
 
   **See Also**
-    :ref:`dirname`, :ref:`joinpath`, :ref:`path_match`, :ref:`readlink`, :ref:`realpath`, :ref:`source_find_file`
+    :ref:`dirname`, :ref:`joinpath`, :ref:`path_match`, :ref:`readlink`, :ref:`realpath`, :ref:`source_find_file`, :ref:`source_languages`
 
 ----
 
@@ -1244,7 +1244,7 @@ dirname(*path*)
       .
 
   **See Also**
-    :ref:`basename`, :ref:`joinpath`, :ref:`path_match`, :ref:`readlink`, :ref:`realpath`, :ref:`source_find_file`
+    :ref:`basename`, :ref:`joinpath`, :ref:`path_match`, :ref:`readlink`, :ref:`realpath`, :ref:`source_find_file`, :ref:`source_languages`
 
 ----
 
@@ -1943,7 +1943,7 @@ joinpath(*path*)
       /bar
 
   **See Also**
-    :ref:`basename`, :ref:`dirname`, :ref:`path_match`, :ref:`readlink`, :ref:`realpath`, :ref:`source_find_file`
+    :ref:`basename`, :ref:`dirname`, :ref:`path_match`, :ref:`readlink`, :ref:`realpath`, :ref:`source_find_file`, :ref:`source_languages`
 
 ----
 
@@ -3566,7 +3566,7 @@ path_match(*pattern*, *path*)
       1
 
   **See Also**
-    :ref:`basename`, :ref:`dirname`, :ref:`joinpath`, :ref:`readlink`, :ref:`realpath`, :ref:`source_find_file`
+    :ref:`basename`, :ref:`dirname`, :ref:`joinpath`, :ref:`readlink`, :ref:`realpath`, :ref:`source_find_file`, :ref:`source_languages`
 
 ----
 
@@ -3879,7 +3879,7 @@ readlink(*path*)
     * **path\*** --- The path to the symbolic link.
 
   **See Also**
-    :ref:`basename`, :ref:`dirname`, :ref:`joinpath`, :ref:`path_match`, :ref:`realpath`, :ref:`source_find_file`
+    :ref:`basename`, :ref:`dirname`, :ref:`joinpath`, :ref:`path_match`, :ref:`realpath`, :ref:`source_find_file`, :ref:`source_languages`
 
 ----
 
@@ -3897,7 +3897,7 @@ realpath(*path*)
     * **path\*** --- The path to resolve.
 
   **See Also**
-    :ref:`basename`, :ref:`dirname`, :ref:`joinpath`, :ref:`path_match`, :ref:`readlink`, :ref:`source_find_file`
+    :ref:`basename`, :ref:`dirname`, :ref:`joinpath`, :ref:`path_match`, :ref:`readlink`, :ref:`source_find_file`, :ref:`source_languages`
 
 ----
 
@@ -4337,7 +4337,30 @@ source_find_file(*path*)
     * **path\*** --- The path to find.
 
   **See Also**
-    :ref:`basename`, :ref:`dirname`, :ref:`joinpath`, :ref:`path_match`, :ref:`readlink`, :ref:`realpath`
+    :ref:`basename`, :ref:`dirname`, :ref:`joinpath`, :ref:`path_match`, :ref:`readlink`, :ref:`realpath`, :ref:`source_languages`
+
+----
+
+
+.. _source_languages:
+
+source_languages()
+^^^^^^^^^^^^^^^^^^
+
+  Returns a JSON object of the programming languages whose source files :add-source-path can map log messages to, each an LSP language identifier, like 'java' or 'cpp', and the extensions of its files (without the dot, matched case-sensitively).  The languages are the ones that can be parsed, whether or not the source paths have files in them.
+
+  **PRQL Name**: fs.source_languages
+
+  **Examples**
+    To get the extensions of Kotlin source files:
+
+    .. code-block::  custsqlite
+
+      ;SELECT source_languages() -> '$.kotlin'
+      ["kt","kts"]
+
+  **See Also**
+    :ref:`basename`, :ref:`dirname`, :ref:`joinpath`, :ref:`path_match`, :ref:`readlink`, :ref:`realpath`, :ref:`source_find_file`
 
 ----
 

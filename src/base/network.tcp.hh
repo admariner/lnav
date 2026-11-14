@@ -37,6 +37,11 @@
 
 namespace network {
 
+enum class transport_t {
+    ssh,
+    kubectl,
+};
+
 struct locality {
     locality(std::optional<std::string> username,
              std::string hostname,
@@ -46,9 +51,25 @@ struct locality {
     {
     }
 
+    static locality for_container(std::string ns,
+                                  std::string pod,
+                                  std::optional<std::string> container)
+    {
+        locality retval{std::nullopt, std::move(pod), std::nullopt};
+
+        retval.l_transport = transport_t::kubectl;
+        retval.l_namespace = std::move(ns);
+        retval.l_container = std::move(container);
+        return retval;
+    }
+
     std::optional<std::string> l_username;
+    /** The host name or, for the kubectl transport, the pod name. */
     std::string l_hostname;
     std::optional<std::string> l_service;
+    transport_t l_transport{transport_t::ssh};
+    std::optional<std::string> l_namespace;
+    std::optional<std::string> l_container;
 };
 
 struct path {

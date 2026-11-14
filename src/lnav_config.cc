@@ -1549,7 +1549,7 @@ static const struct json_path_container ssh_handlers = {
     yajlpp::property_handler("transfer-command")
         .with_synopsis("command")
         .with_description(
-            "Command executed on the remote host when transferring the file")
+            "Unused, the tailer is transferred by a built-in script")
         .for_field(&_lnav_config::lc_tailer, &tailer::config::c_transfer_cmd),
     yajlpp::property_handler("start-command")
         .with_synopsis("command")
@@ -1568,6 +1568,24 @@ static const struct json_path_container ssh_handlers = {
         .with_children(ssh_config_handlers),
 };
 
+static const struct json_path_container kubectl_handlers = {
+    yajlpp::property_handler("command")
+        .with_synopsis("kubectl-command")
+        .with_description("The kubectl command to execute")
+        .for_field(&_lnav_config::lc_tailer, &tailer::config::c_kubectl_cmd),
+    yajlpp::property_handler("flags")
+        .with_synopsis("flags")
+        .with_description("Extra whitespace-separated arguments to pass to "
+                          "the kubectl command")
+        .for_field(&_lnav_config::lc_tailer, &tailer::config::c_kubectl_flags),
+    yajlpp::property_handler("start-command")
+        .with_synopsis("command")
+        .with_description(
+            "Command executed in the container to start the tailer")
+        .for_field(&_lnav_config::lc_tailer,
+                   &tailer::config::c_kubectl_start_cmd),
+};
+
 static const struct json_path_container remote_handlers = {
     yajlpp::property_handler("cache-ttl")
         .with_synopsis("<duration>")
@@ -1582,6 +1600,11 @@ static const struct json_path_container remote_handlers = {
             "Settings related to the ssh command used to contact remote "
             "machines")
         .with_children(ssh_handlers),
+    yajlpp::property_handler("kubectl")
+        .with_description(
+            "Settings related to the kubectl command used to access files in "
+            "Kubernetes containers")
+        .with_children(kubectl_handlers),
 };
 
 static const struct json_path_container sysclip_impl_cmd_handlers = json_path_container{

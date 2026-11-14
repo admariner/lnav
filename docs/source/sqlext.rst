@@ -191,8 +191,15 @@ included in a :code:`SELECT *`:
     milliseconds from the epoch.  This column can be more efficient to use for
     time-related operations, like :ref:`timeslice()<timeslice>`.
   :log_path: The path to the log file this message is from.
-  :log_text: The full text of the log message.
-  :log_body: The body of the log message.
+  :log_text: The full text of the log message.  A :code:`REGEXP`,
+    :code:`LIKE`, or :code:`GLOB` constraint on it, like
+    :code:`log_text LIKE '%timeout%'` or :code:`regexp('...', log_text)`, is
+    checked as the messages are scanned, so the ones that don't match are
+    never passed to SQLite.  (A :code:`LIKE` with an :code:`ESCAPE` clause is
+    left to SQLite.)
+  :log_body: The body of the log message.  As with :code:`log_text`, a
+    :code:`REGEXP`, :code:`LIKE`, or :code:`GLOB` constraint on it is checked
+    during the scan.
   :log_raw_text: The raw text of this message from the log file.  In this case
     of JSON and CSV logs, this will be the exact line of JSON-Line and CSV
     text from the file.
@@ -202,6 +209,14 @@ included in a :code:`SELECT *`:
     :ref:`named searches<named_searches>` that matched this message.
   :log_msg_line_count: The number of lines in the log message, including
     any continuation lines.
+  :log_file_line: The line in the log file where the message starts,
+    counting from one.  For a format that renders a message into several
+    lines, like JSON, this counts the file's lines, not the rendered ones, and
+    finding it reads the file's index from the start, so select it for a few
+    messages rather than a whole log.
+  :log_file_line_count: The number of lines the message takes up in the log
+    file.  Unlike :code:`log_msg_line_count`, this leaves out the lines a format
+    rendered the message into.
 
 Extensions
 ----------

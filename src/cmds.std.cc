@@ -846,7 +846,19 @@ com_goto(exec_context& ec, std::string cmdline, std::vector<std::string>& args)
 
     std::string retval;
 
-    std::string all_args = trim(remaining_args(cmdline, args));
+    // Variables are expanded, as :echo does, so a script can go to a location
+    // it was given, like a permalink (`:goto $link`) from a caller that passes
+    // values as variables rather than writing them into the script.
+    // shlex refers to its input, so it has to outlive the lexer.
+    const auto raw_args = trim(remaining_args(cmdline, args));
+    std::string all_args;
+    {
+        auto lexer = shlex(raw_args);
+        if (!lexer.eval(all_args, ec.create_resolver())) {
+            return ec.make_error("unable to parse the location: {}", raw_args);
+        }
+        all_args = trim(all_args);
+    }
     auto* tc = *lnav_data.ld_view_stack.top();
     std::optional<vis_line_t> dst_vl;
     auto is_location = false;
@@ -1017,8 +1029,8 @@ com_goto(exec_context& ec, std::string cmdline, std::vector<std::string>& args)
         }
         tv = tm.to_timeval();
         dst_vl = ttt->row_for_time(tv);
-    } else if (sscanf(args[1].c_str(), "%f%n", &value, &consumed) == 1) {
-        if (args[1][consumed] == '%') {
+    } else if (sscanf(all_args.c_str(), "%f%n", &value, &consumed) == 1) {
+        if (all_args[consumed] == '%') {
             if (value < 0) {
                 return ec.make_error("negative percentages are not allowed");
             }
@@ -1040,7 +1052,7 @@ com_goto(exec_context& ec, std::string cmdline, std::vector<std::string>& args)
         dst_vl = vis_line_t(line_number);
     } else {
         auto um = lnav::console::user_message::error(
-                      attr_line_t("invalid argument: ").append(args[1]))
+                      attr_line_t("invalid argument: ").append(all_args))
                       .with_reason(
                           "expecting line number/percentage, timestamp, or "
                           "relative time")
@@ -3426,7 +3438,9 @@ lnav::commands::command_t STD_COMMANDS[] = {
             .with_parameter(
                 help_text("line#|N%|timestamp|#anchor",
                           "A line number, percent into the file, timestamp, "
-                          "or an anchor in a text file")
+                          "or an anchor in a text file or a permalink to a "
+                          "log message.  Variables are expanded, as in "
+                          ":echo")
                     .with_format(help_parameter_format_t::HPF_LOCATION))
             .with_examples(
                 {{"To go to line 22", "22"},

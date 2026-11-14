@@ -820,6 +820,7 @@ namespace lnav_rs_ext {
   enum class StmtLevel : ::std::uint8_t;
   enum class LnavLogLevel : ::std::uint8_t;
   struct StartExtResult;
+  struct SourceLanguageExtension;
 }
 
 namespace lnav_rs_ext {
@@ -1123,6 +1124,17 @@ struct StartExtResult final {
 };
 #endif // CXXBRIDGE1_STRUCT_lnav_rs_ext$StartExtResult
 
+#ifndef CXXBRIDGE1_STRUCT_lnav_rs_ext$SourceLanguageExtension
+#define CXXBRIDGE1_STRUCT_lnav_rs_ext$SourceLanguageExtension
+// A file extension log2src parses and the language it is (an LSP language id).
+struct SourceLanguageExtension final {
+  ::rust::String language;
+  ::rust::String extension;
+
+  using IsRelocatable = ::std::true_type;
+};
+#endif // CXXBRIDGE1_STRUCT_lnav_rs_ext$SourceLanguageExtension
+
 void init_ext() noexcept;
 
 ::lnav_rs_ext::CompileResult2 compile_tree(::rust::Vec<::lnav_rs_ext::SourceTreeElement> const &tree, ::lnav_rs_ext::Options const &options) noexcept;
@@ -1142,6 +1154,9 @@ void discover_srcs() noexcept;
 ::rust::String find_src_file(::rust::Str path) noexcept;
 
 ::rust::Vec<::rust::String> source_languages() noexcept;
+
+// Every extension log2src parses, whether or not the source has files with it.
+::rust::Vec<::lnav_rs_ext::SourceLanguageExtension> source_language_extensions() noexcept;
 
 // Log how the messages matched since the last call were matched, and reset the
 // counters.  Nothing is logged if no messages were matched.

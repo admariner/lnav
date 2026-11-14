@@ -182,6 +182,18 @@ toupper(const std::string& str)
     return toupper(str.c_str());
 }
 
+inline char
+ascii_upper(char ch)
+{
+    return (ch >= 'a' && ch <= 'z') ? (char) (ch - 'a' + 'A') : ch;
+}
+
+inline char
+ascii_lower(char ch)
+{
+    return (ch >= 'A' && ch <= 'Z') ? (char) (ch - 'A' + 'a') : ch;
+}
+
 ssize_t utf8_char_to_byte_index(const std::string& str, ssize_t ch_index);
 
 inline Result<size_t, const char*>

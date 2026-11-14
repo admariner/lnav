@@ -3894,7 +3894,9 @@ external_log_format::share_rewritten_subline(const logline& ll,
                   this->jlf_attr_line.al_string.data() + this_off,
                   next_off - this_off);
     }
-    sbr.get_metadata().m_valid_utf = ll.is_valid_utf();
+    // share() reset the metadata.  Not ll.is_valid_utf(): that's the
+    // message's first line, and a CSV row can go on over several.
+    sbr.get_metadata().m_valid_utf = this->jlf_cached_valid_utf;
     sbr.get_metadata().m_has_ansi = ll.has_ansi();
     this->jlf_cached_sub_range.lr_start = this_off;
     this->jlf_cached_sub_range.lr_end = next_off;
@@ -3911,20 +3913,20 @@ external_log_format::apply_text_transform(
             break;
         case json_format_element::transform_t::UPPERCASE:
             for (size_t cindex = begin_size; cindex < s.size(); cindex++) {
-                s[cindex] = toupper(s[cindex]);
+                s[cindex] = ascii_upper(s[cindex]);
             }
             break;
         case json_format_element::transform_t::LOWERCASE:
             for (size_t cindex = begin_size; cindex < s.size(); cindex++) {
-                s[cindex] = tolower(s[cindex]);
+                s[cindex] = ascii_lower(s[cindex]);
             }
             break;
         case json_format_element::transform_t::CAPITALIZE:
             if (begin_size < s.size()) {
-                s[begin_size] = toupper(s[begin_size]);
+                s[begin_size] = ascii_upper(s[begin_size]);
             }
             for (size_t cindex = begin_size + 1; cindex < s.size(); cindex++) {
-                s[cindex] = tolower(s[cindex]);
+                s[cindex] = ascii_lower(s[cindex]);
             }
             break;
     }
@@ -4427,9 +4429,14 @@ external_log_format::get_subline(const log_format_file_state& lffs,
         if (this->jlf_cached_offset != ll.get_offset()
             || this->jlf_cached_opts != opts)
         {
+            // The whole row as read (read_full_message() combines its
+            // lines'), before the rewrite replaces the buffer.
+            const auto valid_utf
+                = sbr.get_metadata().m_valid_utf && ll.is_valid_utf();
             this->rewrite_tabular_subline(lffs, ll, sbr, opts);
             this->jlf_cached_offset = ll.get_offset();
             this->jlf_cached_opts = opts;
+            this->jlf_cached_valid_utf = valid_utf;
         }
         this->share_rewritten_subline(ll, sub_line, sbr, opts);
         return;
@@ -4461,14 +4468,21 @@ external_log_format::get_subline(const log_format_file_state& lffs,
         this->jlf_line_offsets.clear();
 
         auto line_frag = sbr.to_string_fragment();
+        // As read, before the rendering replaces the buffer.
+        const auto valid_utf
+            = sbr.get_metadata().m_valid_utf && ll.is_valid_utf();
 
         if (!line_frag.startswith("{")) {
+            const auto in_meta = sbr.get_metadata();
             this->jlf_attr_line.al_string.assign(line_frag.data(),
                                                  line_frag.length());
             this->jlf_line_values.clear();
             sbr.share(this->jlf_share_manager,
                       this->jlf_attr_line.al_string.data(),
                       this->jlf_attr_line.al_string.size());
+            // The line's own bytes: share() reset the metadata to "valid
+            // UTF-8, no ANSI", whatever they are.
+            sbr.get_metadata() = in_meta;
             this->jlf_line_values.lvv_sbr = sbr.clone();
             this->jlf_attr_line.al_attrs.emplace_back(
                 line_range{0, -1},
@@ -4621,6 +4635,7 @@ external_log_format::get_subline(const log_format_file_state& lffs,
         this->compute_subline_offsets();
         this->jlf_cached_offset = ll.get_offset();
         this->jlf_cached_opts = opts;
+        this->jlf_cached_valid_utf = valid_utf;
     }
 
     this->share_rewritten_subline(ll, sub_line, sbr, opts);

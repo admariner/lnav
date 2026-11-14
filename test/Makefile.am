@@ -232,6 +232,7 @@ dist_noinst_SCRIPTS = \
 	test_prql.sh \
 	test_regex101.sh \
 	test_remote.sh \
+	test_remote_k8s.sh \
 	test_scripts.sh \
 	test_sessions.sh \
 	test_shlexer.sh \
@@ -635,6 +636,7 @@ TESTS = \
 	test_metric_log.sh \
 	test_tabular_format.sh \
     test_regex101.sh \
+    test_remote_k8s.sh \
 	test_reltime \
 	test_scripts.sh \
 	test_sessions.sh \
@@ -747,6 +749,7 @@ test_remote.sh.log: remote/ssh_host_dsa_key remote/ssh_host_rsa_key remote/id_rs
 
 distclean-local:
 	$(RM_V)rm -rf remote remote-tmp not:a:remote:dir
+	$(RM_V)rm -rf k8s-stub k8s-local
 	$(RM_V)rm -rf sessions
 	$(RM_V)rm -rf cfg
 	$(RM_V)rm -rf file-tz

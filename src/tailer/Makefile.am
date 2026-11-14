@@ -28,6 +28,7 @@ noinst_LIBRARIES = \
     libtailerservice.a
 
 noinst_HEADERS = \
+    sdefl.h \
     sha-256.h \
     tailer.h \
     tailer.looper.hh \

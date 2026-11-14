@@ -256,6 +256,15 @@ struct string_fragment {
      */
     size_t start_of_codepoint(size_t byte_index) const;
 
+    /**
+     * This fragment without its last character when that character is
+     * incomplete: the one to three leading bytes of a UTF-8 sequence that a
+     * cut at a byte count left without its end.  A fragment that ends on a
+     * whole character, or on bytes that aren't UTF-8 at all, is returned
+     * as-is.
+     */
+    string_fragment without_partial_codepoint() const;
+
     string_fragment sub_cell_range(int cell_start, int cell_end) const;
 
     constexpr const char& operator[](size_t index) const

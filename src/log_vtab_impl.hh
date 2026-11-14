@@ -188,6 +188,19 @@ struct log_cursor {
         string_constraint(unsigned char op, std::string value);
 
         bool matches(const std::string& sf) const;
+
+        /**
+         * A REGEXP, LIKE, or GLOB constraint on a message's text (log_text,
+         * log_body): REGEXP as SQL's regexp() matches it, the same compiled
+         * pattern and find_in(), so invalid UTF-8 doesn't match here either;
+         * LIKE and GLOB as PCRE patterns that match at least what they do
+         * (lnav::wildcards::like_to_pcre(), glob_to_pcre()), true for invalid
+         * UTF-8, which they match as bytes.
+         * The text is a reference into the message, not a copy.  When lnav
+         * already validated these exact bytes ([valid_utf]), PCRE's own
+         * check is skipped: it cost about as much as the match.
+         */
+        bool matches_text(string_fragment sf, bool valid_utf) const;
     };
 
     template<typename T>
@@ -286,6 +299,15 @@ struct log_cursor {
     std::vector<string_constraint> lc_unique_path;
     logfile* lc_last_unique_path_match{nullptr};
     logfile* lc_last_unique_path_mismatch{nullptr};
+    /**
+     * `REGEXP ?`, `LIKE ?`, and `GLOB ?` on log_text and log_body: checked in
+     * vt_next() on the message, so rows that don't match never reach SQLite.
+     * SQLite still applies them to the rows that do (the constraints aren't
+     * omitted), so LIKE and GLOB are checked as patterns that match at least
+     * what they do.
+     */
+    std::vector<string_constraint> lc_text;
+    std::vector<string_constraint> lc_body;
 
     std::vector<column_constraint> lc_indexed_columns;
     std::vector<vis_line_t> lc_indexed_lines;
@@ -332,7 +354,8 @@ struct log_cursor {
             || !this->lc_pattern_name.empty() || this->lc_opid_bloom_set
             || this->lc_tid_bloom_set || this->lc_opid_is_null
             || this->lc_tid_is_null || !this->lc_log_path.empty()
-            || !this->lc_unique_path.empty();
+            || !this->lc_unique_path.empty() || !this->lc_text.empty()
+            || !this->lc_body.empty();
     }
 
     bool is_eof() const

@@ -40,6 +40,12 @@ typedef enum {
     TPPT_HASH,
     TPPT_INT64,
     TPPT_BITS,
+    /**
+     * Same as TPPT_BITS, but zlib-compressed.  The wire format is the
+     * uncompressed length (int32), the compressed length (int32), and then
+     * the compressed bytes.
+     */
+    TPPT_DEFLATED_BITS,
 } tailer_packet_payload_type_t;
 
 typedef enum {

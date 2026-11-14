@@ -57,6 +57,7 @@
 #include "sqlite-extension-func.hh"
 #include "sqlite3.h"
 #include "vtab_module.hh"
+#include "vtab_module_json.hh"
 #include "yajlpp/yajlpp_def.hh"
 
 #ifdef HAVE_RUST_DEPS
@@ -244,6 +245,36 @@ sql_source_find_file(const char* path)
 #endif
 
     return std::nullopt;
+}
+
+static json_string
+sql_source_languages()
+{
+    yajlpp_gen gen;
+
+    yajl_gen_config(gen, yajl_gen_beautify, false);
+    {
+        yajlpp_map root(gen);
+
+#ifdef HAVE_RUST_DEPS
+        // Grouped by language, in log2src's order (each language's
+        // extensions are together).
+        auto exts = lnav_rs_ext::source_language_extensions();
+        for (size_t lpc = 0; lpc < exts.size();) {
+            auto lang = static_cast<std::string>(exts[lpc].language);
+            root.gen(lang);
+            yajlpp_array arr(gen);
+            for (; lpc < exts.size()
+                 && static_cast<std::string>(exts[lpc].language) == lang;
+                 lpc++)
+            {
+                arr.gen(static_cast<std::string>(exts[lpc].extension));
+            }
+        }
+#endif
+    }
+
+    return json_string(gen);
 }
 
 struct shell_exec_options {
@@ -583,6 +614,25 @@ fs_extension_functions(struct FuncDef** basic_funcs,
                     .with_prql_path({"fs", "source_find_file"})
                     .with_parameter({"path", "The path to find."})
                     .with_tags({"filename"})),
+
+        sqlite_func_adapter<decltype(&sql_source_languages),
+                            sql_source_languages>::
+            builder(
+                help_text("source_languages",
+                          "Returns a JSON object of the programming languages "
+                          "whose source files :add-source-path can map log "
+                          "messages to, each an LSP language identifier, like "
+                          "'java' or 'cpp', and the extensions of its files "
+                          "(without the dot, matched case-sensitively).  The "
+                          "languages are the ones that can be parsed, whether "
+                          "or not the source paths have files in them.")
+                    .sql_function()
+                    .with_prql_path({"fs", "source_languages"})
+                    .with_tags({"filename"})
+                    .with_example({
+                        "To get the extensions of Kotlin source files",
+                        "SELECT source_languages() -> '$.kotlin'",
+                    })),
 
         sqlite_func_adapter<decltype(&sql_shell_exec), sql_shell_exec>::builder(
             help_text("shell_exec",

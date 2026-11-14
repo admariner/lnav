@@ -50,6 +50,8 @@
 #include "byte_array.hh"
 #include "cmd.parser.hh"
 #include "data_scanner.hh"
+#include "pcrepp/wildcards.hh"
+#include "pcrepp/pcre2pp.hh"
 #include "digestible/digestible.h"
 #include "doctest/doctest.h"
 #include "file_split.hh"
@@ -1538,4 +1540,77 @@ TEST_CASE("tdigest copy keeps the compression")
     CHECK(copy.centroid_count() == fresh.centroid_count());
     CHECK(assigned.centroid_count() == fresh.centroid_count());
     CHECK(copy.quantile(99) == fresh.quantile(99));
+}
+
+namespace {
+
+bool
+pcre_matches(const std::string& re, const std::string& subject)
+{
+    auto code = lnav::pcre2pp::code::from(re).unwrap();
+
+    return code.find_in(string_fragment::from_str(subject))
+        .ignore_error()
+        .has_value();
+}
+
+const std::vector<std::string> PATTERN_SUBJECTS = {
+    "",
+    "a",
+    "abc",
+    "ABC",
+    "Nov 12 10:00:00 host sudo: timeout",
+    "line one\nline two",
+    "caf\xc3\xa9",
+    "CAF\xc3\x89",
+    "\xe6\x97\xa5\xe6\x9c\xac",
+    "a.b$c(d)|e{f}+g\\h[i]^j-k",
+    "-",
+    "]",
+    "x-y",
+};
+
+}  // namespace
+
+TEST_CASE("lnav::wildcards::like_to_pcre agrees with sqlite3_strlike()")
+{
+    // Whatever LIKE matches, the pattern does (it may match more: it folds
+    // case beyond ASCII).
+    const std::vector<std::string> patterns = {
+        "%",   "_",   "",      "a%",    "%c",     "%B%",   "A_C",
+        "%e%", "%É%", "caf_",  "%.%",   "%$%",    "%(%)%", "%\\%",
+        "%[i]%", "%|%", "%{%", "%+%",   "line%two", "%\n%", "_-_",
+    };
+    for (const auto& pat : patterns) {
+        auto re = lnav::wildcards::like_to_pcre(string_fragment::from_str(pat));
+        REQUIRE(re.has_value());
+        for (const auto& subj : PATTERN_SUBJECTS) {
+            if (sqlite3_strlike(pat.c_str(), subj.c_str(), 0) == 0) {
+                INFO("LIKE '" << pat << "' with '" << subj << "' as " << *re);
+                CHECK(pcre_matches(*re, subj));
+            }
+        }
+    }
+}
+
+TEST_CASE("lnav::wildcards::glob_to_pcre agrees with sqlite3_strglob()")
+{
+    // The pattern matches exactly what GLOB does.
+    const std::vector<std::string> patterns = {
+        "*",      "?",       "",        "a*",      "*c",     "A*",
+        "[a-c]*", "*[^a-z]*", "[]x]*",  "*[]]*",   "[a-c-e]", "[-a]",
+        "[a-]",   "*[-]*",   "*[é]*",   "caf[é]",  "*\\*",  "*.*",
+        "*$*",    "*(*",     "*|*",     "*{*",     "*+*",     "*?*",
+        "*[[]*",  "*[\\]*", "*[.]*",  "*[\\^]*", "*[x^]*", "line*two",
+        "*\n*",  "[!a]*",   "[^]]",    "*[^-]*",  "*[a-c][a-c]*",
+    };
+    for (const auto& pat : patterns) {
+        auto re = lnav::wildcards::glob_to_pcre(string_fragment::from_str(pat));
+        REQUIRE(re.has_value());
+        for (const auto& subj : PATTERN_SUBJECTS) {
+            INFO("GLOB '" << pat << "' with '" << subj << "' as " << *re);
+            CHECK(pcre_matches(*re, subj)
+                  == (sqlite3_strglob(pat.c_str(), subj.c_str()) == 0));
+        }
+    }
 }

@@ -153,7 +153,12 @@ log_search_table::next(log_cursor& lc, logfile_sub_source& lss)
 {
     // Later matches in a message are rows for the same message, so they keep
     // the attributes and values that were annotated for the first match.
-    if (this->lst_match_index >= 0) {
+    // The cursor can move on before the matches run out, e.g. when a
+    // log_text constraint rejects the message, and then the next line is
+    // searched from the start.
+    if (this->lst_match_index >= 0
+        && lc.lc_curr_line == this->lst_match_line)
+    {
         auto match_res = this->lst_regex->capture_from(this->lst_content)
                              .at(this->lst_remaining)
                              .into(this->lst_match_data)
@@ -232,6 +237,7 @@ log_search_table::next(log_cursor& lc, logfile_sub_source& lss)
     this->lst_rowid += 1;
     this->lst_remaining = match_res->f_remaining;
     this->lst_match_index = 0;
+    this->lst_match_line = lc.lc_curr_line;
 
     return true;
 }

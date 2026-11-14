@@ -165,6 +165,46 @@ file.
   ``tailer.bin.XXXXXX`` where *XXXXXX* is 6 random digits.
   Under normal circumstances, the file should be deleted immediately.
 
+Kubernetes Containers
+"""""""""""""""""""""
+
+Files inside a container in a Kubernetes pod can be opened using the same
+syntax as :command:`kubectl cp`, with the container name as an optional
+third component:
+
+.. code-block:: bash
+
+   lnav namespace/pod[/container]:/path/to/logs
+
+For example, to open :file:`/var/log/nginx/access.log` in the "nginx"
+container of the "web-0" pod in the "default" namespace:
+
+.. code-block:: bash
+
+   lnav default/web-0/nginx:/var/log/nginx/access.log
+
+If the container is not given, :command:`kubectl` picks the pod's default
+container.  The namespace is required, since a bare ``pod:path`` is treated
+as an SSH host.  The tailer is transferred and started using
+:command:`kubectl exec`, so the following are needed:
+
+* Permission to ``create`` the ``pods/exec`` subresource in the namespace.
+* A :command:`sh` in the container and a directory that is writable and
+  allows running programs.  The first of :envvar:`TMPDIR`, :file:`/tmp`,
+  :file:`/var/tmp`, and :envvar:`HOME` that meets both is used.
+* An x86_64 container, or Python3 installed in the container.
+
+The current context of the kubeconfig is used.  To look at a container in
+a different cluster, switch contexts with
+:command:`kubectl config use-context` or point the :envvar:`KUBECONFIG`
+environment variable at another file before starting **lnav**.  Extra
+arguments for :command:`kubectl` can be set with the following
+configuration property:
+
+.. code-block:: lnav
+
+   :config /tuning/remote/kubectl/flags --request-timeout=30s
+
 Command Output
 ^^^^^^^^^^^^^^
 

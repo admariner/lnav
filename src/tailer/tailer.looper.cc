@@ -38,6 +38,9 @@
 #include "tailer.looper.hh"
 
 #include <fcntl.h>
+#include <limits.h>
+#include <poll.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <sys/stat.h>
 
@@ -45,11 +48,14 @@
 #include "base/auto_pid.hh"
 #include "base/file_range.hh"
 #include "base/fs_util.hh"
+#include "base/humanize.hh"
 #include "base/humanize.network.hh"
 #include "base/lnav_log.hh"
 #include "base/paths.hh"
 #include "base/result.h"
+#include "base/string_util.hh"
 #include "config.h"
+#include "fmt/chrono.h"
 #include "fmt/ranges.h"
 #include "line_buffer.hh"
 #include "lnav.hh"
@@ -64,6 +70,55 @@
 using namespace std::chrono_literals;
 
 static const auto HOST_RETRY_DELAY = 1min;
+
+using msg_level = lnav::console::user_message::level;
+
+/**
+ * Apply a change to the status of a remote and let the main thread know so
+ * that the details panel can be refreshed.
+ */
+static void
+notify_remote_status_changed(const std::string& netloc)
+{
+    isc::to<main_looper&, services::main_t>().send([netloc](auto& mlooper) {
+        lnav_data.ld_files_source.remote_status_changed(netloc);
+    });
+}
+
+template<typename F>
+static void
+update_remote_status(const std::string& netloc, F func)
+{
+    {
+        auto sp = lnav_data.ld_active_files.fc_progress->writeAccess();
+
+        func(sp->sp_remotes[netloc]);
+    }
+    notify_remote_status_changed(netloc);
+}
+
+static void
+remote_log(const std::string& netloc, lnav::console::user_message um)
+{
+    update_remote_status(netloc,
+                         [&](remote_status& rs) { rs.add_log(std::move(um)); });
+}
+
+static void
+set_remote_state(const std::string& netloc,
+                 msg_level level,
+                 std::string state,
+                 std::optional<lnav::console::user_message> log_msg
+                 = std::nullopt)
+{
+    update_remote_status(netloc, [&](remote_status& rs) {
+        rs.rs_state = std::move(state);
+        rs.rs_state_level = level;
+        if (log_msg) {
+            rs.add_log(std::move(log_msg.value()));
+        }
+    });
+}
 
 static void
 read_err_pipe(const std::string& netloc,
@@ -93,12 +148,15 @@ read_err_pipe(const std::string& netloc,
                         = string_fragment(sbr.get_data(), 0, sbr.length())
                               .trim("\n");
                     {
-                        safe::WriteAccess<tailer::safe_error_queue>
-                            writable_eq(eq);
+                        safe::WriteAccess<tailer::safe_error_queue> writable_eq(
+                            eq);
 
-                        if (writable_eq->size() < 10) {
-                            writable_eq->emplace_back(line_str.to_string());
+                        // The last lines are the ones closest to a
+                        // failure, so the oldest are dropped.
+                        if (writable_eq->size() >= 10) {
+                            writable_eq->erase(writable_eq->begin());
                         }
+                        writable_eq->emplace_back(line_str.to_string());
                     }
 
                     auto level = line_str.startswith("error:")
@@ -113,6 +171,32 @@ read_err_pipe(const std::string& netloc,
                                     netloc.c_str(),
                                     line_str.length(),
                                     line_str.data());
+                    // Before the tailer starts, everything on stderr comes
+                    // from the transport or the bootstrap script and could
+                    // explain a failure.  After that, the tailer reports
+                    // every block it offers, which would push the
+                    // interesting lines out, so only problems are kept.
+                    {
+                        auto sp = lnav_data.ld_active_files.fc_progress
+                                      ->writeAccess();
+                        auto& rs = sp->sp_remotes[netloc];
+
+                        if (rs.rs_connected && level != lnav_log_level_t::ERROR
+                            && level != lnav_log_level_t::WARNING)
+                        {
+                            return;
+                        }
+                        auto al = attr_line_t("remote: ")
+                                      .append(attr_line_t::from_ansi_str(
+                                          line_str.to_string()));
+                        rs.add_log(
+                            level == lnav_log_level_t::ERROR
+                                ? lnav::console::user_message::error(al)
+                                : level == lnav_log_level_t::WARNING
+                                ? lnav::console::user_message::warning(al)
+                                : lnav::console::user_message::raw(al));
+                    }
+                    notify_remote_status_changed(netloc);
                 });
             }
         }
@@ -125,6 +209,8 @@ update_tailer_progress(const std::string& netloc, const std::string& msg)
     lnav_data.ld_active_files.fc_progress->writeAccess()
         ->sp_tailers[netloc]
         .tp_message = msg;
+    set_remote_state(
+        netloc, msg_level::info, msg, lnav::console::user_message::raw(msg));
 }
 
 static void
@@ -175,17 +261,21 @@ tailer::looper::loop_body()
             auto create_res = host_tailer::for_host(netloc);
 
             if (create_res.isErr()) {
+                set_remote_state(
+                    netloc,
+                    msg_level::error,
+                    "Unable to connect",
+                    lnav::console::user_message::error(create_res.unwrapErr()));
                 report_error(netloc, create_res.unwrapErr());
-                if (std::any_of(rpq.rpq_new_paths.begin(),
-                                rpq.rpq_new_paths.end(),
-                                [](const auto& pair) {
-                                    return !pair.second.loo_follow;
-                                }))
-                {
+                if (rpq.has_unfollowed_paths()) {
                     rpq.send_synced_to_main(netloc);
                     to_erase.push_back(netloc);
                 } else {
                     rpq.rpq_next_attempt_time = now + HOST_RETRY_DELAY;
+                    remote_log(
+                        netloc,
+                        lnav::console::user_message::raw(fmt::format(
+                            FMT_STRING("retrying in {}"), HOST_RETRY_DELAY)));
                 }
                 continue;
             }
@@ -292,9 +382,10 @@ tailer::looper::complete_path(const network::path& path)
 }
 
 static std::vector<std::string>
-create_ssh_args_from_config(const std::string& dest)
+create_ssh_args(const tailer::config& cfg,
+                const network::locality& loc,
+                const std::string& remote_cmd)
 {
-    const auto& cfg = injector::get<const tailer::config&>();
     std::vector<std::string> retval;
 
     retval.emplace_back(cfg.c_ssh_cmd);
@@ -320,9 +411,116 @@ create_ssh_args_from_config(const std::string& dest)
         retval.emplace_back(
             fmt::format(FMT_STRING("-o{}={}"), pair.first, pair.second));
     }
-    retval.emplace_back(dest);
+    if (loc.l_username) {
+        retval.emplace_back(fmt::format(
+            FMT_STRING("{}@{}"), loc.l_username.value(), loc.l_hostname));
+    } else {
+        retval.emplace_back(loc.l_hostname);
+    }
+
+    // The remote login shell might not be POSIX-compatible, so run the
+    // command through sh.
+    std::string quoted_cmd = "sh -c '";
+    for (const auto ch : remote_cmd) {
+        if (ch == '\'') {
+            quoted_cmd.append("'\\''");
+        } else {
+            quoted_cmd.push_back(ch);
+        }
+    }
+    quoted_cmd.push_back('\'');
+    retval.emplace_back(quoted_cmd);
 
     return retval;
+}
+
+static std::vector<std::string>
+create_kubectl_args(const tailer::config& cfg,
+                    const network::locality& loc,
+                    const std::string& remote_cmd)
+{
+    std::vector<std::string> retval;
+
+    retval.emplace_back(cfg.c_kubectl_cmd);
+    split_ws(cfg.c_kubectl_flags, retval);
+    retval.emplace_back("-n");
+    retval.emplace_back(loc.l_namespace.value_or("default"));
+    retval.emplace_back("exec");
+    retval.emplace_back("-i");
+    retval.emplace_back("-q");
+    retval.emplace_back(loc.l_hostname);
+    if (loc.l_container) {
+        retval.emplace_back("-c");
+        retval.emplace_back(loc.l_container.value());
+    }
+    retval.emplace_back("--");
+    retval.emplace_back("sh");
+    retval.emplace_back("-c");
+    retval.emplace_back(remote_cmd);
+
+    return retval;
+}
+
+static std::vector<std::string>
+create_transport_args(const network::locality& loc,
+                      const std::string& remote_cmd)
+{
+    const auto& cfg = injector::get<const tailer::config&>();
+
+    switch (loc.l_transport) {
+        case network::transport_t::kubectl:
+            return create_kubectl_args(cfg, loc, remote_cmd);
+        case network::transport_t::ssh:
+            break;
+    }
+    return create_ssh_args(cfg, loc, remote_cmd);
+}
+
+/**
+ * Prefix for the bootstrap script in a container, where the working
+ * directory might not be writable or might be on a "noexec" mount.  An
+ * empty file is used to check if programs can be run, the shell runs it as
+ * an empty script if the exec succeeds.
+ */
+static constexpr auto CONTAINER_WORK_DIR_SCRIPT
+    = R"(w=; t=.lnav-exec-check.$$; )"
+      R"(for d in $TMPDIR /tmp /var/tmp $HOME; do )"
+      R"(cd "$d" 2>/dev/null || continue; )"
+      R"(true 2>/dev/null > "$t" && chmod +x "$t" && ./"$t" 2>/dev/null )"
+      R"(&& w=1; rm -f "$t"; [ -n "$w" ] && break; done; )"
+      R"([ -n "$w" ] || { echo "error: no writable directory that allows )"
+      R"(running programs was found" >&2; exit 1; }; )";
+
+/**
+ * The line printed by the bootstrap script to tell lnav which tailer
+ * implementation should be sent.
+ */
+static constexpr auto BOOTSTRAP_IMPL_MARKER = "lnav-tailer-impl: "_frag;
+
+/**
+ * Build the script that runs on the remote side to receive and start the
+ * tailer over a single connection.  The script prints which implementation
+ * it wants, reads the size of the implementation as a line on stdin, reads
+ * that many bytes into a file, and then starts the tailer with the same
+ * stdin/stdout so the connection becomes the protocol channel.
+ */
+static std::string
+create_bootstrap_script(bool in_container,
+                        const std::string& tailer_bin_name,
+                        const std::string& start_cmd)
+{
+    return fmt::format(
+        FMT_STRING("{}"
+                   "if command -v python3 >/dev/null 2>&1; "
+                   "then i=py; else i=ape; fi; "
+                   "echo \"{}$i\"; "
+                   "read -r n || exit 1; "
+                   "head -c \"$n\" > {} && chmod ugo+rx ./{} && {}"),
+        in_container ? CONTAINER_WORK_DIR_SCRIPT : "",
+        BOOTSTRAP_IMPL_MARKER,
+        tailer_bin_name,
+        tailer_bin_name,
+        fmt::format(fmt::runtime(start_cmd), tailer_bin_name));
 }
 
 Result<std::shared_ptr<tailer::looper::host_tailer>, std::string>
@@ -336,132 +534,26 @@ tailer::looper::host_tailer::for_host(const std::string& netloc)
     auto tailer_bin_name = fmt::format(FMT_STRING("tailer.bin.{}"), getpid());
 
     auto rp = humanize::network::path::from_str(netloc).value();
-    auto ssh_dest = rp.p_locality.l_hostname;
-    if (rp.p_locality.l_username.has_value()) {
-        ssh_dest = fmt::format(FMT_STRING("{}@{}"),
-                               rp.p_locality.l_username.value(),
-                               rp.p_locality.l_hostname);
-    }
+    const auto is_kubectl
+        = rp.p_locality.l_transport == network::transport_t::kubectl;
+    const auto script = create_bootstrap_script(
+        is_kubectl,
+        tailer_bin_name,
+        is_kubectl ? cfg.c_kubectl_start_cmd : cfg.c_start_cmd);
 
-    std::string cp_err;
-    for (const auto& tailer_impl : tailer_bin) {
-        auto in_pipe = TRY(auto_pipe::for_child_fd(STDIN_FILENO));
-        auto out_pipe = TRY(auto_pipe::for_child_fd(STDOUT_FILENO));
-        auto err_pipe = TRY(auto_pipe::for_child_fd(STDERR_FILENO));
-        auto child = TRY(lnav::pid::from_fork());
-
-        in_pipe.after_fork(child.in());
-        out_pipe.after_fork(child.in());
-        err_pipe.after_fork(child.in());
-
-        if (child.in_child()) {
-            auto arg_strs = create_ssh_args_from_config(ssh_dest);
-            std::vector<char*> args;
-            auto cmd = fmt::format(cfg.c_transfer_cmd, tailer_bin_name);
-
-            if (tailer_impl.get_name().endswith(".py")) {
-                cmd = fmt::format(FMT_STRING("command -v python3 && {}"), cmd);
-            }
-            arg_strs.emplace_back(cmd);
-
-            fmt::print(stderr,
-                       "tailer({}): executing -- {}\n",
-                       netloc,
-                       fmt::join(arg_strs, " "));
-            for (const auto& arg : arg_strs) {
-                args.push_back((char*) arg.data());
-            }
-            args.push_back(nullptr);
-
-            execvp(cfg.c_ssh_cmd.c_str(), args.data());
-            _exit(EXIT_FAILURE);
-        }
-
-        safe_error_queue error_queue;
-        log_debug("tailer(%s): starting err reader", netloc.c_str());
-        std::thread err_reader([netloc,
-                                err = std::move(err_pipe.read_end()),
-                                &error_queue]() mutable {
-            log_set_thread_prefix(
-                fmt::format(FMT_STRING("tailer({})"), netloc));
-            read_err_pipe(netloc, err, error_queue);
-        });
-
-        log_debug("tailer(%s): writing to child", netloc.c_str());
-        bool write_failed = false;
-        std::string producer_err;
-
-        auto sfp = tailer_impl.to_string_fragment_producer();
-        while (true) {
-            auto next_res = sfp->next();
-            if (next_res.is<string_fragment_producer::eof>()) {
-                break;
-            }
-
-            if (next_res.is<string_fragment_producer::error>()) {
-                // Cannot return from here, the err_reader thread still needs
-                // to be joined and the child reaped.
-                producer_err
-                    = next_res.get<string_fragment_producer::error>().what;
-                write_failed = true;
-                break;
-            }
-
-            auto sf = next_res.get<string_fragment>();
-
-            auto write_res = in_pipe.write_end().write_fully(sf);
-            if (write_res.isErr()) {
-                log_error("  tailer(%s): write failed -- %s",
-                          netloc.c_str(),
-                          write_res.unwrapErr().c_str());
-                write_failed = true;
-                break;
-            }
-        }
-
-        in_pipe.write_end().reset();
-
-        while (!write_failed) {
-            char buffer[1024];
-
-            auto rc = read(out_pipe.read_end(), buffer, sizeof(buffer));
-            if (rc < 0) {
-                break;
-            }
-            if (rc == 0) {
-                break;
-            }
-            log_debug("tailer(%s): transfer output -- %.*s",
-                      netloc.c_str(),
-                      (int) rc,
-                      buffer);
-        }
-
-        auto finished_child = std::move(child).wait_for_child();
-
-        err_reader.join();
-        if (!producer_err.empty()) {
-            return Err(producer_err);
-        }
-        if (!finished_child.was_normal_exit()
-            || finished_child.exit_status() != EXIT_SUCCESS)
-        {
-            auto readable_eq = error_queue.readAccess();
-            auto error_msg = readable_eq->empty() ? "unknown"
-                                                  : readable_eq->back();
-            log_warning("tailer transfer failed: %s", error_msg.c_str());
-            cp_err = fmt::format(FMT_STRING("failed to ssh to host: {}"),
-                                 error_msg);
-            continue;
-        }
-        cp_err.clear();
-        break;
-    }
-    if (!cp_err.empty()) {
-        return Err(cp_err);
-    }
-
-    update_tailer_progress(netloc, "Starting tailer...");
+    // Logged here instead of in the child so the child's stderr only has
+    // output from the remote side, which is used for error messages.
+    auto arg_strs = create_transport_args(rp.p_locality, script);
+    log_info("tailer(%s): executing -- %s",
+             netloc.c_str(),
+             fmt::to_string(fmt::join(arg_strs, " ")).c_str());
+    // The script is long and not interesting to the user, so only the
+    // command that runs it is shown.
+    remote_log(
+        netloc,
+        lnav::console::user_message::raw(fmt::format(
+            FMT_STRING("executing: {} ..."),
+            fmt::join(arg_strs.begin(), std::prev(arg_strs.end()), " "))));
 
     auto in_pipe = TRY(auto_pipe::for_child_fd(STDIN_FILENO));
     auto out_pipe = TRY(auto_pipe::for_child_fd(STDOUT_FILENO));
@@ -473,29 +565,232 @@ tailer::looper::host_tailer::for_host(const std::string& netloc)
     err_pipe.after_fork(child.in());
 
     if (child.in_child()) {
-        auto arg_strs = create_ssh_args_from_config(ssh_dest);
         std::vector<char*> args;
 
-        arg_strs.emplace_back(fmt::format(cfg.c_start_cmd, tailer_bin_name));
-
-        fmt::print(stderr,
-                   FMT_STRING("tailer({}): executing -- {}\n"),
-                   netloc,
-                   fmt::join(arg_strs, " "));
         for (const auto& arg : arg_strs) {
             args.push_back((char*) arg.data());
         }
         args.push_back(nullptr);
 
-        execvp(cfg.c_ssh_cmd.c_str(), args.data());
+        execvp(args[0], args.data());
         _exit(EXIT_FAILURE);
     }
 
-    return Ok(std::make_shared<host_tailer>(netloc,
-                                            std::move(child),
-                                            std::move(in_pipe.write_end()),
-                                            std::move(out_pipe.read_end()),
-                                            std::move(err_pipe.read_end())));
+    auto retval = std::make_shared<host_tailer>(netloc,
+                                                std::move(child),
+                                                std::move(in_pipe.write_end()),
+                                                std::move(out_pipe.read_end()),
+                                                std::move(err_pipe.read_end()));
+    auto bootstrap_res = retval->bootstrap();
+    if (bootstrap_res.isErr()) {
+        auto error_msg = bootstrap_res.unwrapErr();
+
+        log_warning("tailer bootstrap failed: %s", error_msg.c_str());
+        return Err(
+            is_kubectl
+                ? fmt::format(FMT_STRING("failed to exec in container: {}"),
+                              error_msg)
+                : fmt::format(FMT_STRING("failed to ssh to host: {}"),
+                              error_msg));
+    }
+
+    return Ok(retval);
+}
+
+/**
+ * How long to wait for the remote side to make progress while the tailer
+ * is being transferred and started.
+ */
+static constexpr auto BOOTSTRAP_TIMEOUT = 30s;
+
+/**
+ * Wait for the given events on the FD.
+ *
+ * @return false if the timeout expired.
+ */
+static bool
+wait_for_fd(int fd, short events)
+{
+    static constexpr auto TIMEOUT_MS
+        = std::chrono::duration_cast<std::chrono::milliseconds>(
+              BOOTSTRAP_TIMEOUT)
+              .count();
+
+    while (true) {
+        pollfd pfd{fd, events, 0};
+        auto rc = poll(&pfd, 1, TIMEOUT_MS);
+
+        if (rc < 0 && errno == EINTR) {
+            continue;
+        }
+        // Errors are reported by the read()/write() that follows.
+        return rc != 0;
+    }
+}
+
+Result<void, std::string>
+tailer::looper::host_tailer::bootstrap()
+{
+    auto& conn = this->ht_state.get<connected>();
+
+    auto fail = [this, &conn](std::string msg) -> Result<void, std::string> {
+        auto finished_child = std::move(conn).close();
+
+        this->ht_state = disconnected();
+        if (this->ht_error_reader.joinable()) {
+            this->ht_error_reader.join();
+        }
+
+        // The remote's stderr usually says why, e.g. an authentication
+        // failure behind a closed connection, but isn't a substitute for
+        // what went wrong here.
+        auto readable_eq = this->ht_error_queue.readAccess();
+        if (!readable_eq->empty()) {
+            msg = fmt::format(FMT_STRING("{} -- {}"), msg, readable_eq->back());
+        }
+        return Err(msg);
+    };
+    auto timed_out = [&conn, &fail](const char* what) {
+        // The child might be stuck, so it would not exit when its stdin is
+        // closed.
+        kill(conn.ht_child.in(), SIGTERM);
+        return fail(fmt::format(FMT_STRING("timed out after {} seconds {}"),
+                                BOOTSTRAP_TIMEOUT.count(),
+                                what));
+    };
+    auto write_bits = [&conn](string_fragment sf) -> Result<bool, std::string> {
+        // Writes of at most PIPE_BUF bytes do not block once poll() says the
+        // pipe is writable.
+        while (!sf.empty()) {
+            if (!wait_for_fd(conn.ht_to_child.get(), POLLOUT)) {
+                return Ok(false);
+            }
+            auto chunk = sf.sub_range(
+                0, std::min(sf.length(), static_cast<int>(PIPE_BUF)));
+            TRY(conn.ht_to_child.write_fully(chunk));
+            sf = sf.substr(chunk.length());
+        }
+        return Ok(true);
+    };
+
+    std::optional<std::string> impl_name;
+    {
+        std::string line;
+
+        while (!impl_name) {
+            if (!wait_for_fd(conn.ht_from_child.get(), POLLIN)) {
+                return timed_out("waiting for the remote command to start");
+            }
+
+            char ch;
+            auto rc = read(conn.ht_from_child.get(), &ch, 1);
+
+            if (rc < 0 && errno == EINTR) {
+                continue;
+            }
+            if (rc <= 0) {
+                return fail("connection closed before the tailer was sent");
+            }
+            if (ch != '\n') {
+                if (line.size() > 4096) {
+                    return fail("unexpected output from the remote command");
+                }
+                line.push_back(ch);
+                continue;
+            }
+
+            auto line_sf = string_fragment::from_str(line);
+            if (line_sf.startswith(BOOTSTRAP_IMPL_MARKER.data())) {
+                impl_name = line_sf.substr(BOOTSTRAP_IMPL_MARKER.length())
+                                .to_string();
+            } else {
+                log_debug("bootstrap output -- %s", line.c_str());
+                remote_log(this->ht_netloc,
+                           lnav::console::user_message::raw(
+                               attr_line_t("remote: ")
+                                   .append(attr_line_t::from_ansi_str(line))));
+            }
+            line.clear();
+        }
+    }
+
+    const auto suffix = fmt::format(FMT_STRING(".{}"), impl_name.value());
+    const bin_src_file* tailer_impl = nullptr;
+    for (const auto& impl : tailer_bin) {
+        if (impl.get_name().endswith(suffix.c_str())) {
+            tailer_impl = &impl;
+            break;
+        }
+    }
+    if (tailer_impl == nullptr) {
+        return fail(fmt::format(FMT_STRING("unknown tailer implementation: {}"),
+                                impl_name.value()));
+    }
+
+    log_info("sending tailer implementation: %s",
+             tailer_impl->get_name().to_string().c_str());
+    remote_log(this->ht_netloc,
+               lnav::console::user_message::raw(fmt::format(
+                   FMT_STRING("sending the {} tailer ({})"),
+                   impl_name.value() == "py" ? "Python" : "native",
+                   humanize::file_size(tailer_impl->get_uncompressed_size(),
+                                       humanize::alignment::none))));
+    auto size_line
+        = fmt::format(FMT_STRING("{}\n"), tailer_impl->get_uncompressed_size());
+    auto write_res = write_bits(string_fragment::from_str(size_line));
+    if (write_res.isErr()) {
+        return fail(write_res.unwrapErr());
+    }
+    if (!write_res.unwrap()) {
+        return timed_out("sending the tailer");
+    }
+    auto sfp = tailer_impl->to_string_fragment_producer();
+    while (true) {
+        auto next_res = sfp->next();
+        if (next_res.is<string_fragment_producer::eof>()) {
+            break;
+        }
+        if (next_res.is<string_fragment_producer::error>()) {
+            return fail(next_res.get<string_fragment_producer::error>().what);
+        }
+
+        auto block_write_res = write_bits(next_res.get<string_fragment>());
+        if (block_write_res.isErr()) {
+            return fail(block_write_res.unwrapErr());
+        }
+        if (!block_write_res.unwrap()) {
+            return timed_out("sending the tailer");
+        }
+    }
+
+    update_tailer_progress(this->ht_netloc, "Starting tailer...");
+
+    // Wait for the tailer to announce itself so nothing else is written to
+    // the connection while the bootstrap script is still reading the tailer.
+    if (!wait_for_fd(conn.ht_from_child.get(), POLLIN)) {
+        return timed_out("waiting for the tailer to start");
+    }
+    auto packet_res = tailer::read_packet(conn.ht_from_child.get());
+    if (packet_res.isErr()) {
+        return fail(packet_res.unwrapErr());
+    }
+    auto packet = packet_res.unwrap();
+    if (!packet.is<tailer::packet_announce>()) {
+        return fail("the tailer did not start");
+    }
+    this->ht_uname = packet.get<tailer::packet_announce>().pa_uname;
+    update_tailer_description(
+        this->ht_netloc, conn.c_desired_paths, this->ht_uname);
+    update_remote_status(this->ht_netloc, [this](remote_status& rs) {
+        rs.rs_state = "Syncing";
+        rs.rs_state_level = msg_level::info;
+        rs.rs_connected = true;
+        rs.rs_uname = this->ht_uname;
+        rs.add_log(lnav::console::user_message::ok(
+            fmt::format(FMT_STRING("tailer started on: {}"), this->ht_uname)));
+    });
+
+    return Ok();
 }
 
 static std::filesystem::path
@@ -551,6 +846,10 @@ tailer::looper::host_tailer::open_remote_path(const std::string& path,
 {
     this->ht_state.match(
         [&](connected& conn) {
+            remote_log(
+                this->ht_netloc,
+                lnav::console::user_message::raw(
+                    attr_line_t("opening: ").append(lnav::roles::file(path))));
             conn.c_desired_paths[path] = std::move(loo);
             send_packet(conn.ht_to_child.get(),
                         TPT_OPEN_PATH,
@@ -663,6 +962,11 @@ tailer::looper::host_tailer::loop_body()
             log_error("tailer(%s): read error: %s",
                       this->ht_netloc.c_str(),
                       errmsg.c_str());
+            set_remote_state(this->ht_netloc,
+                             msg_level::error,
+                             "Disconnected",
+                             lnav::console::user_message::error("read error")
+                                 .with_reason(errmsg));
             report_error(this->ht_netloc, errmsg);
             auto finished_child = std::move(conn).close();
             log_debug("tailer(%s): exit status %d",
@@ -680,10 +984,20 @@ tailer::looper::host_tailer::loop_body()
 
                 auto finished_child = std::move(conn).close();
                 auto readable_eq = this->ht_error_queue.readAccess();
-                if (finished_child.exit_status() != 0 && !readable_eq->empty())
-                {
+                if (finished_child.exit_status() != 0
+                    && !readable_eq->empty()) {
                     report_error(this->ht_netloc, readable_eq->back());
                 }
+                auto closed_um = lnav::console::user_message::error(
+                    fmt::format(FMT_STRING("connection closed, exit status {}"),
+                                finished_child.exit_status()));
+                if (finished_child.exit_status() == 0) {
+                    closed_um.um_level = msg_level::warning;
+                }
+                set_remote_state(this->ht_netloc,
+                                 closed_um.um_level,
+                                 "Disconnected",
+                                 closed_um);
 
                 return state_v{disconnected()};
             },
@@ -701,6 +1015,11 @@ tailer::looper::host_tailer::loop_body()
                 log_debug("Got an error: %s -- %s",
                           pe.pe_path.c_str(),
                           pe.pe_msg.c_str());
+                remote_log(
+                    this->ht_netloc,
+                    lnav::console::user_message::error(
+                        attr_line_t().append(lnav::roles::file(pe.pe_path)))
+                        .with_reason(pe.pe_msg));
 
                 lnav_data.ld_active_files.fc_progress->writeAccess()
                     ->sp_tailers.erase(this->ht_netloc);
@@ -734,6 +1053,11 @@ tailer::looper::host_tailer::loop_body()
                     && conn.c_child_paths.empty()) {
                     log_info("tailer(%s): all desired paths synced",
                              this->ht_netloc.c_str());
+                    set_remote_state(this->ht_netloc,
+                                     msg_level::ok,
+                                     "Synced",
+                                     lnav::console::user_message::ok(
+                                         "all paths synced, disconnecting"));
                     return state_v{synced{}};
                 }
 
@@ -980,6 +1304,11 @@ tailer::looper::host_tailer::loop_body()
                     && conn.c_child_paths.empty()) {
                     log_info("tailer(%s): all desired paths synced",
                              this->ht_netloc.c_str());
+                    set_remote_state(this->ht_netloc,
+                                     msg_level::ok,
+                                     "Synced",
+                                     lnav::console::user_message::ok(
+                                         "all paths synced, disconnecting"));
                     return state_v{synced{}};
                 } else if (!conn.c_initial_sync_done
                            && conn.c_desired_paths.size()
@@ -989,6 +1318,12 @@ tailer::looper::host_tailer::loop_body()
                 {
                     log_info("tailer(%s): all desired paths synced",
                              this->ht_netloc.c_str());
+                    set_remote_state(this->ht_netloc,
+                                     msg_level::ok,
+                                     "Following",
+                                     lnav::console::user_message::ok(
+                                         "initial sync done, following "
+                                         "changes"));
                     conn.c_initial_sync_done = true;
 
                     std::set<std::string> synced_files;
@@ -1179,20 +1514,51 @@ tailer::looper::child_finished(std::shared_ptr<service_base> child)
             continue;
         }
 
+        auto netloc_iter = this->l_netlocs_to_paths.find(iter->first);
         if (child_tailer->is_synced()) {
             log_info("synced with netloc '%s', removing", iter->first.c_str());
-            auto netloc_iter = this->l_netlocs_to_paths.find(iter->first);
 
             if (netloc_iter != this->l_netlocs_to_paths.end()) {
                 netloc_iter->second.send_synced_to_main(netloc_iter->first);
                 this->l_netlocs_to_paths.erase(netloc_iter);
             }
+        } else if (netloc_iter != this->l_netlocs_to_paths.end()
+                   && netloc_iter->second.has_unfollowed_paths())
+        {
+            log_info("disconnected from netloc '%s', not retrying",
+                     iter->first.c_str());
+            netloc_iter->second.send_synced_to_main(netloc_iter->first);
+            this->l_netlocs_to_paths.erase(netloc_iter);
+        } else if (netloc_iter != this->l_netlocs_to_paths.end()) {
+            log_info("disconnected from netloc '%s', retrying in %lld seconds",
+                     iter->first.c_str(),
+                     (long long) std::chrono::duration_cast<std::chrono::seconds>(
+                         HOST_RETRY_DELAY)
+                         .count());
+            netloc_iter->second.rpq_next_attempt_time
+                = std::chrono::steady_clock::now() + HOST_RETRY_DELAY;
+            remote_log(iter->first,
+                       lnav::console::user_message::raw(fmt::format(
+                           FMT_STRING("retrying in {}"), HOST_RETRY_DELAY)));
         }
         lnav_data.ld_active_files.fc_progress->writeAccess()->sp_tailers.erase(
             iter->first);
         this->l_remotes.erase(iter);
         return;
     }
+}
+
+bool
+tailer::looper::remote_path_queue::has_unfollowed_paths() const
+{
+    auto unfollowed
+        = [](const auto& pair) { return !pair.second.loo_follow; };
+
+    return std::any_of(
+               this->rpq_new_paths.begin(), this->rpq_new_paths.end(), unfollowed)
+        || std::any_of(this->rpq_existing_paths.begin(),
+                       this->rpq_existing_paths.end(),
+                       unfollowed);
 }
 
 void

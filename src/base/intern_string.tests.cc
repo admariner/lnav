@@ -534,6 +534,47 @@ TEST_CASE("string_fragment::cursor")
     }
 }
 
+TEST_CASE("string_fragment::without_partial_codepoint")
+{
+    // "a“é": 'a', then the three bytes of the quote, then the two of the é.
+    const auto sf = string_fragment::from_const("a“é");
+
+    CHECK(sf.length() == 6);
+
+    SUBCASE("a fragment ending on a whole character is left alone")
+    {
+        CHECK(sf.without_partial_codepoint() == sf);
+        CHECK(sf.sub_range(0, 4).without_partial_codepoint().length() == 4);
+        CHECK(string_fragment::from_const("abc").without_partial_codepoint()
+              == "abc");
+        CHECK(string_fragment().without_partial_codepoint().empty());
+    }
+
+    SUBCASE("a cut inside the last character drops it")
+    {
+        // é's lead byte alone.
+        CHECK(sf.sub_range(0, 5).without_partial_codepoint().length() == 4);
+        // One and two bytes of the quote.
+        CHECK(sf.sub_range(0, 2).without_partial_codepoint().length() == 1);
+        CHECK(sf.sub_range(0, 3).without_partial_codepoint().length() == 1);
+    }
+
+    SUBCASE("a four-byte character cut short is dropped")
+    {
+        // U+1F600, cut after three of its four bytes.
+        const auto emoji = string_fragment::from_const("x\xf0\x9f\x98");
+
+        CHECK(emoji.without_partial_codepoint() == "x");
+    }
+
+    SUBCASE("bytes that aren't UTF-8 are left as they are")
+    {
+        const auto junk = string_fragment::from_const("ab\x80\x80\x80\x80");
+
+        CHECK(junk.without_partial_codepoint() == junk);
+    }
+}
+
 TEST_CASE("string_fragment::start_of_codepoint")
 {
     // "“ab" -- bytes 1 and 2 are continuations of the quote at byte 0.

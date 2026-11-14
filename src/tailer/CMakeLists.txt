@@ -1,16 +1,16 @@
-add_library(tailercommon sha-256.c sha-256.h tailer.c tailer.h)
+add_library(tailercommon sdefl.h sha-256.c sha-256.h tailer.c tailer.h)
 
 add_executable(tailer tailer.main.c)
 
 target_link_libraries(tailer tailercommon)
 
 add_library(tailerpp tailerpp.hh tailerpp.cc)
-target_link_libraries(tailerpp base)
+target_link_libraries(tailerpp base ZLIB::ZLIB)
 
 add_custom_command(
         OUTPUT tailerbin.h tailerbin.cc
-        COMMAND bin2c -n tailer_bin tailerbin ${CMAKE_CURRENT_SOURCE_DIR}/tailer.main.py tailer
-        DEPENDS bin2c tailer)
+        COMMAND bin2c -n tailer_bin tailerbin ${CMAKE_CURRENT_SOURCE_DIR}/tailer.main.py ${CMAKE_CURRENT_SOURCE_DIR}/tailer.ape
+        DEPENDS bin2c ${CMAKE_CURRENT_SOURCE_DIR}/tailer.main.py ${CMAKE_CURRENT_SOURCE_DIR}/tailer.ape)
 
 add_library(tailerservice
         tailer.looper.hh

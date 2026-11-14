@@ -1003,7 +1003,7 @@
   Go to the given location in the top view
 
   **Parameters**
-    * **line#|N%|timestamp|#anchor\*** --- A line number, percent into the file, timestamp, or an anchor in a text file
+    * **line#|N%|timestamp|#anchor\*** --- A line number, percent into the file, timestamp, or an anchor in a text file or a permalink to a log message.  Variables are expanded, as in :echo
 
   **Examples**
     To go to line 22:

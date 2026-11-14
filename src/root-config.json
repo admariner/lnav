@@ -114,6 +114,11 @@
                 },
                 "start-command": "bash -c ./{0:}",
                 "transfer-command": "cat > {0:} && chmod ugo+rx ./{0:}"
+            },
+            "kubectl": {
+                "command": "kubectl",
+                "flags": "",
+                "start-command": "exec sh -c ./{0:}"
             }
         },
         "piper": {

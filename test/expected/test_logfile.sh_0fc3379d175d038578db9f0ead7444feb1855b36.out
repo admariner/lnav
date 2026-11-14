@@ -1,0 +1,4 @@
+log_line,has_escape,log_text
+0,0,"Nov 12 10:00:00 host app[1]: first red
+  continued green"
+2,0,Nov 12 10:00:01 host app[1]: single blue

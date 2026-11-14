@@ -35,7 +35,12 @@ import hashlib
 import select
 import stat
 import enum
+import zlib
 from typing import List, Optional
+
+# Payloads smaller than this are not worth compressing.
+MIN_DEFLATE_LENGTH = 4 * 1024
+DEFLATE_LEVEL = 1
 
 
 class TailerPacketType(enum.IntEnum):
@@ -63,6 +68,7 @@ class TailerPacketPayloadType(enum.IntEnum):
     TPPT_HASH = 2
     TPPT_INT64 = 3
     TPPT_BITS = 4
+    TPPT_DEFLATED_BITS = 5
 
 
 class ClientState(enum.IntEnum):
@@ -117,6 +123,18 @@ def send_packet(fd: int, packet_type: int, *args):
 
         ptype = arg[0]
         value = arg[1]
+
+        if ptype == TailerPacketPayloadType.TPPT_BITS \
+                and len(value) >= MIN_DEFLATE_LENGTH:
+            deflated = zlib.compress(value, DEFLATE_LEVEL)
+            if len(deflated) < len(value):
+                data.extend(struct.pack(
+                    'iii',
+                    int(TailerPacketPayloadType.TPPT_DEFLATED_BITS),
+                    len(value),
+                    len(deflated)))
+                data.extend(deflated)
+                continue
 
         data.extend(struct.pack('i', int(ptype)))
 
